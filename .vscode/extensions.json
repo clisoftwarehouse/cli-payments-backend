@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    "yzhang.markdown-all-in-one",
+    "DavidAnson.vscode-markdownlint",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "vivaxy.vscode-conventional-commits",
+    "streetsidesoftware.code-spell-checker",
+    "usernamehw.errorlens",
+    "aaron-bond.better-comments",
+  ]
+}

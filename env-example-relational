@@ -1,0 +1,99 @@
+NODE_ENV=development
+APP_PORT=3000
+APP_NAME="CLI Payments API"
+API_PREFIX=api
+APP_FALLBACK_LANGUAGE=es
+APP_HEADER_LANGUAGE=x-custom-lang
+FRONTEND_DOMAIN=http://localhost:5173
+BACKEND_DOMAIN=http://localhost:3000
+# 5173 = cli-payments-admin (Vite), 3001 = Vitriona (Next), 4321 = landing CLI (Astro)
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:4321
+
+DATABASE_TYPE=postgres
+# Neon (Postgres en la nube) — usar la "Pooled connection" del dashboard de Neon.
+# Formato: postgresql://<user>:<password>@<host>.neon.tech/<db>?sslmode=require
+# Para dev local: crear un branch "dev" en el mismo proyecto de Neon (https://neon.tech/docs/guides/branching).
+DATABASE_URL=postgresql://user:password@ep-xxx-pooler.us-east-1.aws.neon.tech/cli_payments?sslmode=require
+DATABASE_SYNCHRONIZE=false
+DATABASE_MAX_CONNECTIONS=20
+DATABASE_SSL_ENABLED=true
+DATABASE_REJECT_UNAUTHORIZED=false
+# Variables individuales — solo se usan si DATABASE_URL está vacío (fallback para Postgres local).
+DATABASE_HOST=
+DATABASE_PORT=
+DATABASE_USERNAME=
+DATABASE_PASSWORD=
+DATABASE_NAME=
+DATABASE_CA=
+DATABASE_KEY=
+DATABASE_CERT=
+
+# Support "local", "s3", "s3-presigned"
+FILE_DRIVER=local
+ACCESS_KEY_ID=
+SECRET_ACCESS_KEY=
+AWS_S3_REGION=
+AWS_DEFAULT_S3_BUCKET=
+
+# Email — Resend (https://resend.com)
+RESEND_API_KEY=re_xxx_generate_at_resend_com
+MAIL_DEFAULT_EMAIL=noreply@clisoftwarehouse.com
+MAIL_DEFAULT_NAME="CLI Payments"
+
+AUTH_JWT_SECRET=secret
+AUTH_JWT_TOKEN_EXPIRES_IN=15m
+AUTH_REFRESH_SECRET=secret_for_refresh
+AUTH_REFRESH_TOKEN_EXPIRES_IN=3650d
+AUTH_FORGOT_SECRET=secret_for_forgot
+AUTH_FORGOT_TOKEN_EXPIRES_IN=30m
+AUTH_CONFIRM_EMAIL_SECRET=secret_for_confirm_email
+AUTH_CONFIRM_EMAIL_TOKEN_EXPIRES_IN=1d
+
+FACEBOOK_APP_ID=
+FACEBOOK_APP_SECRET=
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+APPLE_APP_AUDIENCE=[]
+
+# Redis para BullMQ (polling Sitef + webhooks salientes).
+# Upstash Redis (https://upstash.com): formato rediss://default:<password>@<endpoint>.upstash.io:6379
+# Crear una BD separada para dev y otra para prod en el mismo Upstash account.
+WORKER_HOST=rediss://default:password@endpoint.upstash.io:6379
+
+# --- CLI Payments ---
+
+# Exchange rates (FX)
+# Cron cada 6 horas — DolarApi refresca varias veces al día y la BCV oficial cambia 1-2 veces al día.
+FX_CRON_SCHEDULE="0 */6 * * *"
+FX_CRON_TIMEZONE="America/Caracas"
+FX_PRIMARY_SOURCE=DOLARAPI
+FX_FALLBACK_SOURCES=YADIO,EXCHANGEDYN
+FX_DOLARAPI_URL=https://ve.dolarapi.com/v1
+FX_YADIO_URL=https://api.yadio.io/exrates/VES
+FX_EXCHANGEDYN_URL=https://api.exchangedyn.com/markets/quotes/eurves/spot
+FX_STALE_HOURS_ALERT=24
+
+# Payments — Sitef
+SITEF_BASE_URL=https://api.sitefdevenezuela.com/prod
+# Política Sitef: token nuevo por cada request (TTL real 600s). Estrategia: per_request | cached.
+SITEF_TOKEN_STRATEGY=per_request
+SITEF_TOKEN_CACHE_TTL_SECONDS=540
+SITEF_DEFAULT_CURRENCY=VES
+# Timeout HTTP para llamadas a Sitef. Confirmación OTP de C2P puede tardar 30-60s
+# porque Sitef valida contra el banco emisor (BDV, Banesco, etc.). Default 90s.
+SITEF_TIMEOUT_MS=90000
+APP_CHECKOUT_TOKEN_SECRET=change-me-to-random-64-chars
+APP_CHECKOUT_TOKEN_EXPIRES_IN=7d
+APP_ENCRYPTION_KEY=change-me-to-32-bytes-hex
+PAYMENTS_ZELLE_ENABLED=false
+PAYMENTS_RATE_LIMIT_PER_HOUR=5
+
+# Slug de la Application "landing" — usado por POST /public/landing/quick-checkout
+# para saber a qué application asignar las invoices creadas desde el sitio web público.
+LANDING_APPLICATION_SLUG=landing-cli
+
+# Webhooks salientes
+WEBHOOK_SIGNING_VERSION=v1
+WEBHOOK_RETRY_BACKOFF_SECONDS=10,30,120,600,3600

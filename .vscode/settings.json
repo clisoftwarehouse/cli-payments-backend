@@ -1,0 +1,18 @@
+{
+  "markdown.extension.toc.levels": "2..6",
+  "markdown.extension.orderedList.autoRenumber": false,
+  "editor.formatOnSave": true,
+  "typescript.preferences.importModuleSpecifier": "relative",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "symbols.files.associations": {
+    "*.module.ts": "nest",
+    "*.service.ts": "nest-service",
+    "*.controller.ts": "nest-controller",
+    "*.middleware.ts": "nest-middleware",
+    "*.pipe.ts": "nest-pipe",
+    "*.decorator.ts": "nest-decorator",
+    "*.guard.ts": "nest-guard",
+  }
+}
