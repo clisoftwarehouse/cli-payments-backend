@@ -24,6 +24,7 @@ import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationDto } from './dto/update-application.dto';
 import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
 import { WebhookEndpoint, WebhookEndpointWithSecret } from './domain/webhook-endpoint';
 
 @ApiTags('Applications (admin)')
@@ -106,5 +107,15 @@ export class ApplicationsController {
   @Get(':id/webhook-endpoints')
   listWebhookEndpoints(@Param('id', ParseUUIDPipe) id: string): Promise<WebhookEndpoint[]> {
     return this.applicationsService.listWebhookEndpoints(id);
+  }
+
+  @ApiOperation({ summary: 'Actualizar webhook endpoint: URL, eventos o activar/desactivar (sin borrar).' })
+  @ApiOkResponse({ type: WebhookEndpoint })
+  @Patch('webhook-endpoints/:id')
+  updateWebhookEndpoint(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateWebhookEndpointDto,
+  ): Promise<WebhookEndpoint> {
+    return this.applicationsService.updateWebhookEndpoint(id, dto);
   }
 }

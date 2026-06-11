@@ -8,6 +8,7 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationDto } from './dto/update-application.dto';
 import { WebhookEndpointWithSecret } from './domain/webhook-endpoint';
 import { CreateWebhookEndpointDto } from './dto/create-webhook-endpoint.dto';
+import { UpdateWebhookEndpointDto } from './dto/update-webhook-endpoint.dto';
 import { IPaginationOptions } from '@/common/utils/types/pagination-options';
 import { ApplicationRepository } from './infrastructure/persistence/application.repository';
 
@@ -100,5 +101,9 @@ export class ApplicationsService {
 
   listWebhookEndpoints(applicationId: string) {
     return this.applicationsRepository.findWebhookEndpointsByApplication(applicationId);
+  }
+
+  updateWebhookEndpoint(id: string, dto: UpdateWebhookEndpointDto) {
+    return this.applicationsRepository.updateWebhookEndpoint(id, dto);
   }
 }
