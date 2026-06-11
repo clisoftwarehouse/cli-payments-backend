@@ -115,7 +115,10 @@ export class SubscriptionsService {
         productId: product.id,
         billingCycle: dto.billingCycle,
       });
-      const deliveryIds = await this.appendOutboxEvents(em, applicationId, saved.id, realSuccess.emit);
+      const deliveryIds = await this.appendOutboxEvents(em, applicationId, saved.id, realSuccess.emit, {
+        externalSubscriptionId: saved.externalSubscriptionId,
+        customerId: saved.customerId,
+      });
 
       return { saved, deliveryIds };
     });
@@ -439,7 +442,10 @@ export class SubscriptionsService {
         { emitted: success.emit.map((e) => e.eventKind) },
       );
 
-      const deliveryIds = await this.appendOutboxEvents(em, saved.applicationId, saved.id, success.emit);
+      const deliveryIds = await this.appendOutboxEvents(em, saved.applicationId, saved.id, success.emit, {
+        externalSubscriptionId: saved.externalSubscriptionId,
+        customerId: saved.customerId,
+      });
       return { saved, deliveryIds };
     });
 
@@ -503,6 +509,7 @@ export class SubscriptionsService {
     applicationId: string,
     subscriptionId: string,
     events: LifecycleSuccess['emit'],
+    identity: { externalSubscriptionId: string | null; customerId: string },
   ): Promise<string[]> {
     const ids: string[] = [];
     for (const evt of events) {
@@ -512,7 +519,15 @@ export class SubscriptionsService {
         aggregateId: subscriptionId,
         eventKind: evt.eventKind as EventKind,
         deliveryKey: evt.deliveryKey,
-        payload: evt.payload,
+        // El payload del lifecycle es agnóstico de identidad. Inyectamos
+        // external_subscription_id (= businessId del SaaS) y customer_id para que el
+        // consumidor mapee el evento a su entidad sin lookups extra. (`...evt.payload`
+        // va al final para que el lifecycle pueda sobreescribir si algún día los define.)
+        payload: {
+          external_subscription_id: identity.externalSubscriptionId,
+          customer_id: identity.customerId,
+          ...evt.payload,
+        },
       });
       ids.push(...result.deliveryIds);
     }
