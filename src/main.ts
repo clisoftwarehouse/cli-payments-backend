@@ -14,7 +14,21 @@ async function bootstrap() {
   const corsOrigins = (process.env.CORS_ORIGINS ?? '')
     .split(',')
     .map((o) => o.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    // Las entradas con `*` (ej. `https://*.vitriona.app`) se convierten a RegExp
+    // para soportar subdominios multi-tenant. El `*` matchea una sola etiqueta (sin puntos).
+    .map((o) =>
+      o.includes('*')
+        ? new RegExp(
+            '^' +
+              o
+                .split('*')
+                .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                .join('[^.]+') +
+              '$',
+          )
+        : o,
+    );
 
   const app = await NestFactory.create(AppModule, {
     cors: {
