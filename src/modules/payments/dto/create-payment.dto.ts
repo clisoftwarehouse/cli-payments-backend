@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsIn, IsObject, IsString, MaxLength } from 'class-validator';
 
-import { PaymentMethodKind } from '../domain/payment';
+import { PaymentMethodKind } from '@/modules/gateways/sitef/payment-gateway.port';
 
 export class CreatePaymentBodyDto {
   @ApiProperty({ enum: ['c2p', 'transfer', 'pago_movil', 'web_button', 'card_ccr'] })

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Queue } from 'bullmq';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bullmq';
@@ -85,6 +86,59 @@ export class PaymentsService {
     );
 
     await this.invokeGateway(payment, dto.method, dto.methodData, invoice.number ?? payment.id);
+    return this.toDomain(await this.paymentsRepo.findOneOrFail({ where: { id: payment.id } }));
+  }
+
+  /**
+   * Verificación manual (admin): reusa el flujo del checkout para verificar un pago por
+   * referencia contra Sitef (transfer / pago_movil). En éxito otorga la factura/suscripción.
+   * Genera una idempotencyKey nueva por intento para permitir reintentos del admin.
+   */
+  async verifyForInvoice(
+    invoiceId: string,
+    method: 'transfer' | 'pago_movil',
+    methodData: Record<string, unknown>,
+  ): Promise<Payment> {
+    return this.createForInvoice(invoiceId, {
+      method,
+      methodData,
+      idempotencyKey: `manual-verify-${invoiceId}-${randomUUID()}`,
+    });
+  }
+
+  /**
+   * Force-grant (admin): marca la factura como pagada SIN cobrar — registra un pago `manual`
+   * con el motivo (auditoría) y dispara onPaymentSucceeded (mismo grant que un pago real:
+   * markPaid + invoice.paid → activa la suscripción si aplica).
+   */
+  async grantManually(invoiceId: string, reason: string): Promise<Payment> {
+    const invoice = await this.invoices.findById(invoiceId);
+    if (invoice.status === 'paid') throw new ConflictException('La factura ya fue pagada.');
+    if (invoice.status !== 'open')
+      throw new BadRequestException(`Factura en estado ${invoice.status} no acepta otorgamiento manual.`);
+
+    const payment = await this.paymentsRepo.save(
+      this.paymentsRepo.create({
+        applicationId: invoice.applicationId,
+        customerId: invoice.customerId,
+        invoiceId: invoice.id,
+        idempotencyKey: `manual-grant-${invoiceId}-${randomUUID()}`,
+        status: 'succeeded',
+        methodKind: 'manual',
+        gateway: 'manual',
+        displayCurrency: invoice.displayCurrency,
+        displayAmount: invoice.displayAmount,
+        fxRateSource: invoice.fxRateSource,
+        fxRateUsed: invoice.fxRateUsed,
+        fxRateDate: invoice.fxRateDate,
+        chargedCurrency: invoice.chargedCurrency,
+        chargedAmount: invoice.chargedAmount,
+        methodData: { manual: true, reason },
+        succeededAt: new Date(),
+      }),
+    );
+
+    await this.onPaymentSucceeded(payment);
     return this.toDomain(await this.paymentsRepo.findOneOrFail({ where: { id: payment.id } }));
   }
 

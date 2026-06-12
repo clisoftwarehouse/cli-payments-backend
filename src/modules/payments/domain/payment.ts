@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export type PaymentStatus = 'pending' | 'requires_action' | 'requires_otp' | 'succeeded' | 'failed' | 'canceled';
-export type PaymentMethodKind = 'c2p' | 'transfer' | 'web_button' | 'zelle' | 'pago_movil' | 'card_ccr';
+export type PaymentMethodKind = 'c2p' | 'transfer' | 'web_button' | 'zelle' | 'pago_movil' | 'card_ccr' | 'manual';
 export type Gateway = 'sitef' | 'zelle_manual' | 'manual';
 
 export class Payment {
@@ -23,7 +23,7 @@ export class Payment {
   @ApiProperty({ enum: ['pending', 'requires_action', 'requires_otp', 'succeeded', 'failed', 'canceled'] })
   status: PaymentStatus;
 
-  @ApiProperty({ enum: ['c2p', 'transfer', 'web_button', 'zelle', 'pago_movil', 'card_ccr'] })
+  @ApiProperty({ enum: ['c2p', 'transfer', 'web_button', 'zelle', 'pago_movil', 'card_ccr', 'manual'] })
   methodKind: PaymentMethodKind;
 
   @ApiProperty({ enum: ['sitef', 'zelle_manual', 'manual'] })

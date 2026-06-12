@@ -4,6 +4,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiOkResponse } from '@nestjs/swagger';
 import {
   Get,
+  Body,
+  Post,
   Param,
   Query,
   UseGuards,
@@ -14,6 +16,8 @@ import {
 } from '@nestjs/common';
 
 import { PaymentsService } from './payments.service';
+import { ManualGrantDto } from './dto/manual-grant.dto';
+import { ManualVerifyDto } from './dto/manual-verify.dto';
 import { Payment, PaymentAttempt } from './domain/payment';
 import { PaymentEntity } from './infrastructure/persistence/relational/entities/payment.entity';
 import { PaymentAttemptEntity } from './infrastructure/persistence/relational/entities/payment-attempt.entity';
@@ -75,5 +79,25 @@ export class PaymentsController {
       take: limit,
     });
     return attempts.map((a) => Object.assign(new PaymentAttempt(), a) as PaymentAttempt);
+  }
+
+  @ApiOperation({
+    summary: 'Verificación manual de un pago por referencia contra Sitef (transfer / pago_movil).',
+    description: 'Para cuando el cliente ya pagó pero falló la verificación automática. En éxito otorga la factura/suscripción.',
+  })
+  @ApiOkResponse({ type: Payment })
+  @Post('verify')
+  verify(@Body() dto: ManualVerifyDto): Promise<Payment> {
+    return this.paymentsService.verifyForInvoice(dto.invoiceId, dto.method, dto.methodData);
+  }
+
+  @ApiOperation({
+    summary: 'Otorgar (force-grant) una factura sin cobrar — requiere motivo (auditoría).',
+    description: 'Marca la factura pagada y dispara la activación (suscripción si aplica). Para errores/pruebas donde Sitef no valida.',
+  })
+  @ApiOkResponse({ type: Payment })
+  @Post('grant')
+  grant(@Body() dto: ManualGrantDto): Promise<Payment> {
+    return this.paymentsService.grantManually(dto.invoiceId, dto.reason);
   }
 }
