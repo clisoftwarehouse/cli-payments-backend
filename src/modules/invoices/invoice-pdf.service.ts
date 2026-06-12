@@ -57,7 +57,6 @@ export class InvoicePdfService implements OnModuleInit {
             [
               { text: 'Aplicación', style: 'label' },
               { text: application.name, style: 'value' },
-              { text: `slug: ${application.slug}`, style: 'muted' },
             ],
             [
               { text: 'Cliente', style: 'label' },
@@ -132,7 +131,7 @@ export class InvoicePdfService implements OnModuleInit {
         ...(invoice.fxRateUsed
           ? [
               {
-                text: `Tasa de cambio aplicada: 1 ${invoice.displayCurrency} = ${this.fmtMoney(invoice.fxRateUsed)} ${invoice.chargedCurrency} (${invoice.fxRateSource}, ${invoice.fxRateDate}).`,
+                text: `Tasa de cambio aplicada: 1 ${invoice.displayCurrency} = ${this.fmtMoney(invoice.fxRateUsed)} ${invoice.chargedCurrency} (tasa BCV del ${invoice.fxRateDate}).`,
                 style: 'muted',
                 margin: [0, 12, 0, 0] as [number, number, number, number],
               },

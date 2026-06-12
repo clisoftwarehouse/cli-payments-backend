@@ -46,6 +46,7 @@ export type SitefOperationResponse = {
     }>;
     marcada?: 'marcada' | 'verified';
     ticket?: string;
+    error_list?: Array<{ error_code?: string; description?: string }>;
   };
 };
 

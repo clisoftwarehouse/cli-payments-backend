@@ -193,7 +193,7 @@ export class SitefAdapter extends PaymentGatewayPort {
 
     const { request, response } = await this.client.post('/s4/sitefAuth/getTrfSitef', creds, {
       amount,
-      paymenreference: md.paymentReference, // nota: Sitef usa "paymenreference" sin la 't'
+      paymentreference: md.paymentReference,
       origendni: md.originDni,
       origenbank: this.toBankCode(md.originBank),
       receivingbank: creds.acquirerBank,
@@ -344,6 +344,20 @@ export class SitefAdapter extends PaymentGatewayPort {
     request: Record<string, unknown>,
     rawResponse: Record<string, unknown>,
   ): CreatePaymentResult {
+    // Sitef devuelve error_list cuando un campo es inválido (ej. referencia mal formada).
+    // Hay que exponerlo en vez de enmascararlo como un genérico NOT_FOUND.
+    const sitefError = r.data?.error_list?.[0];
+    if (sitefError) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: `SITEF_${sitefError.error_code ?? 'ERROR'}`,
+        failureMessage: sitefError.description ?? 'Sitef rechazó la verificación.',
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
     const tx = r.data?.transaction_list?.[0];
     if (!tx) {
       return {
