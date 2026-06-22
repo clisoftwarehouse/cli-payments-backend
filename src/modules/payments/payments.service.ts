@@ -17,6 +17,7 @@ import {
 import { Payment } from './domain/payment';
 import { Money } from '@/common/money/money';
 import { AllConfigType } from '@/config/config.type';
+import { Invoice } from '@/modules/invoices/domain/invoice';
 import { CreatePaymentBodyDto } from './dto/create-payment.dto';
 import { InvoicesService } from '@/modules/invoices/invoices.service';
 import { OutboxService } from '@/modules/outbox/outbox.service';
@@ -108,8 +109,13 @@ export class PaymentsService {
 
   /**
    * Force-grant (admin): marca la factura como pagada SIN cobrar — registra un pago `manual`
-   * con el motivo (auditoría) y dispara onPaymentSucceeded (mismo grant que un pago real:
-   * markPaid + invoice.paid → activa la suscripción si aplica).
+   * con el motivo (auditoría) y dispara el mismo grant que un pago real (invoice.paid →
+   * activa la suscripción si aplica).
+   *
+   * Toda la operación va en una transacción serializada por el compare-and-swap de
+   * `markPaid`: solo el ganador crea el Payment, marca la factura y encola invoice.paid.
+   * Un segundo grant concurrente (doble-click, o admin + pago real simultáneo) pierde el
+   * CAS y se rechaza limpio con Conflict — sin Payment duplicado ni doble webhook.
    */
   async grantManually(invoiceId: string, reason: string): Promise<Payment> {
     const invoice = await this.invoices.findById(invoiceId);
@@ -117,29 +123,52 @@ export class PaymentsService {
     if (invoice.status !== 'open')
       throw new BadRequestException(`Factura en estado ${invoice.status} no acepta otorgamiento manual.`);
 
-    const payment = await this.paymentsRepo.save(
-      this.paymentsRepo.create({
-        applicationId: invoice.applicationId,
-        customerId: invoice.customerId,
-        invoiceId: invoice.id,
-        idempotencyKey: `manual-grant-${invoiceId}-${randomUUID()}`,
-        status: 'succeeded',
-        methodKind: 'manual',
-        gateway: 'manual',
-        displayCurrency: invoice.displayCurrency,
-        displayAmount: invoice.displayAmount,
-        fxRateSource: invoice.fxRateSource,
-        fxRateUsed: invoice.fxRateUsed,
-        fxRateDate: invoice.fxRateDate,
-        chargedCurrency: invoice.chargedCurrency,
-        chargedAmount: invoice.chargedAmount,
-        methodData: { manual: true, reason },
-        succeededAt: new Date(),
-      }),
-    );
+    const settled = await this.dataSource.transaction(async (em) => {
+      const { invoice: inv, transitioned } = await this.invoices.markPaid(invoiceId, em);
+      if (!transitioned) return null;
 
-    await this.onPaymentSucceeded(payment);
-    return this.toDomain(await this.paymentsRepo.findOneOrFail({ where: { id: payment.id } }));
+      const repo = em.getRepository(PaymentEntity);
+      const payment = await repo.save(
+        repo.create({
+          applicationId: inv.applicationId,
+          customerId: inv.customerId,
+          invoiceId: inv.id,
+          idempotencyKey: `manual-grant-${invoiceId}-${randomUUID()}`,
+          status: 'succeeded',
+          methodKind: 'manual',
+          gateway: 'manual',
+          displayCurrency: inv.displayCurrency,
+          displayAmount: inv.displayAmount,
+          fxRateSource: inv.fxRateSource,
+          fxRateUsed: inv.fxRateUsed,
+          fxRateDate: inv.fxRateDate,
+          chargedCurrency: inv.chargedCurrency,
+          chargedAmount: inv.chargedAmount,
+          methodData: { manual: true, reason },
+          succeededAt: new Date(),
+        }),
+      );
+
+      const append = await this.outbox.append(em, {
+        applicationId: payment.applicationId,
+        aggregateType: 'invoice',
+        aggregateId: inv.id,
+        eventKind: 'invoice.paid',
+        deliveryKey: `inv_${inv.id}.paid`,
+        payload: { invoice_id: inv.id, payment_id: payment.id },
+      });
+
+      return { payment, invoice: inv, deliveryIds: append.deliveryIds };
+    });
+
+    // Perdió el CAS — otra confirmación marcó la factura paid primero.
+    if (!settled) throw new ConflictException('La factura ya fue pagada.');
+
+    if (settled.deliveryIds.length > 0) await this.outboxQueue.dispatchMany(settled.deliveryIds);
+    await this.advanceSubscriptionIfAny(settled.invoice, settled.payment);
+    await this.emitPaymentSucceeded(settled.payment);
+
+    return this.toDomain(settled.payment);
   }
 
   /** Submit OTP para un payment C2P pendiente. */
@@ -337,40 +366,52 @@ export class PaymentsService {
 
   private async onPaymentSucceeded(payment: PaymentEntity): Promise<void> {
     if (payment.invoiceId) {
-      // Atomic: markPaid + outbox.append(invoice.paid) en una sola transacción.
-      // Si commit falla, ni el invoice se marca paid ni se emite el evento.
-      const { invoice, deliveryIds } = await this.dataSource.transaction(async (em) => {
-        const inv = await this.invoices.markPaid(payment.invoiceId!, em);
+      // markPaid es un compare-and-swap atómico: solo la PRIMERA confirmación de este
+      // invoice gana la transición (`transitioned=true`). Así, si dos pagos resuelven el
+      // mismo invoice (ej. force-grant del admin + un poll de C2P que llega tarde), el
+      // webhook invoice.paid y el avance de la suscripción ocurren UNA sola vez.
+      // El append al outbox va en la misma transacción que el markPaid.
+      const { invoice, transitioned, deliveryIds } = await this.dataSource.transaction(async (em) => {
+        const { invoice: inv, transitioned: won } = await this.invoices.markPaid(payment.invoiceId!, em);
+        if (!won) return { invoice: inv, transitioned: false, deliveryIds: [] as string[] };
         const append = await this.outbox.append(em, {
           applicationId: payment.applicationId,
           aggregateType: 'invoice',
           aggregateId: inv.id,
           eventKind: 'invoice.paid',
-          deliveryKey: `inv_${inv.id}.paid.${payment.id}`,
+          // deliveryKey scoped al invoice (no al payment): doble defensa — el UNIQUE del
+          // outbox garantiza un solo invoice.paid aunque dos pagos ganaran la transición.
+          deliveryKey: `inv_${inv.id}.paid`,
           payload: { invoice_id: payment.invoiceId, payment_id: payment.id },
         });
-        return { invoice: inv, deliveryIds: append.deliveryIds };
+        return { invoice: inv, transitioned: true, deliveryIds: append.deliveryIds };
       });
 
-      if (deliveryIds.length > 0) await this.outboxQueue.dispatchMany(deliveryIds);
-
-      // Subscription advance es independiente — `subscriptions.onRenewalPaid` tiene
-      // su propia transacción atómica (state + audit + outbox.append). Si falla,
-      // el invoice ya quedó paid, lo cual es el invariante correcto: el pago se
-      // confirmó. El admin puede re-disparar manualmente la renovación.
-      const subscriptionItem = invoice.items.find(
-        (it) => it.metadata && typeof it.metadata['subscription_id'] === 'string',
-      );
-      if (subscriptionItem) {
-        const subscriptionId = subscriptionItem.metadata!['subscription_id'] as string;
-        try {
-          await this.subscriptions.onRenewalPaid(subscriptionId, invoice.id, payment.id);
-        } catch (err) {
-          this.logger.error(`onRenewalPaid falló para sub=${subscriptionId}: ${(err as Error).message}`);
-        }
+      if (transitioned) {
+        if (deliveryIds.length > 0) await this.outboxQueue.dispatchMany(deliveryIds);
+        await this.advanceSubscriptionIfAny(invoice, payment);
       }
     }
     await this.emitPaymentSucceeded(payment);
+  }
+
+  /**
+   * Avanza la suscripción si el invoice corresponde a una renovación. Best-effort e
+   * independiente: `subscriptions.onRenewalPaid` tiene su propia transacción atómica
+   * (state + audit + outbox.append). Si falla, el invoice ya quedó paid —invariante
+   * correcto, el pago se confirmó— y el admin puede re-disparar la renovación.
+   */
+  private async advanceSubscriptionIfAny(invoice: Invoice, payment: PaymentEntity): Promise<void> {
+    const subscriptionItem = invoice.items.find(
+      (it) => it.metadata && typeof it.metadata['subscription_id'] === 'string',
+    );
+    if (!subscriptionItem) return;
+    const subscriptionId = subscriptionItem.metadata!['subscription_id'] as string;
+    try {
+      await this.subscriptions.onRenewalPaid(subscriptionId, invoice.id, payment.id);
+    } catch (err) {
+      this.logger.error(`onRenewalPaid falló para sub=${subscriptionId}: ${(err as Error).message}`);
+    }
   }
 
   private async emitPaymentSucceeded(payment: PaymentEntity): Promise<void> {
