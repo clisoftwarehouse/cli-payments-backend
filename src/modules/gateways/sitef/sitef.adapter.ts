@@ -87,7 +87,7 @@ export class SitefAdapter extends PaymentGatewayPort {
     this.requireFields(md, ['destinationId', 'destinationMobileNumber', 'destinationBank']);
 
     const { request, response } = await this.client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
-      destinationid: md.destinationId,
+      destinationid: this.toIdentityDocument(md.destinationId),
       destinationmobilenumber: this.toInternationalPhone(md.destinationMobileNumber),
       destinationbank: this.toBankCode(md.destinationBank),
       issuingbank: creds.acquirerBank,
@@ -109,7 +109,7 @@ export class SitefAdapter extends PaymentGatewayPort {
     this.requireFields(md, ['destinationId', 'destinationMobileNumber', 'destinationBank']);
 
     const { request, response } = await this.client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
-      destinationid: md.destinationId,
+      destinationid: this.toIdentityDocument(md.destinationId),
       destinationmobilenumber: this.toInternationalPhone(md.destinationMobileNumber),
       destinationbank: this.toBankCode(md.destinationBank),
       issuingbank: creds.acquirerBank,
@@ -193,11 +193,11 @@ export class SitefAdapter extends PaymentGatewayPort {
 
     const { request, response } = await this.client.post('/s4/sitefAuth/getTrfSitef', creds, {
       amount,
-      paymentreference: md.paymentReference,
-      origendni: md.originDni,
+      paymentreference: this.toPaymentReference(md.paymentReference),
+      origendni: this.toIdentityDocument(md.originDni),
       origenbank: this.toBankCode(md.originBank),
       receivingbank: creds.acquirerBank,
-      trxdate: md.trxDate,
+      trxdate: this.toSitefDate(md.trxDate),
     });
 
     return this.mapTransactionListResult(response, request, response as unknown as Record<string, unknown>);
@@ -217,11 +217,11 @@ export class SitefAdapter extends PaymentGatewayPort {
 
     const { request, response } = await this.client.post('/s4/sitefAuth/getBusquedaSitef', creds, {
       amount,
-      paymentreference: md.paymentReference,
+      paymentreference: this.toPaymentReference(md.paymentReference),
       debitphone: this.toInternationalPhone(md.debitPhone),
       origenbank: this.toBankCode(md.originBank),
       invoicenumber: invoiceNumber,
-      trxdate: md.trxDate,
+      trxdate: this.toSitefDate(md.trxDate),
       receivingbank: creds.acquirerBank,
     });
 
@@ -457,13 +457,15 @@ export class SitefAdapter extends PaymentGatewayPort {
     // getBusquedaSitef necesita: amount, paymentreference, debitphone, origenbank, invoicenumber, trxdate, receivingbank.
     this.requireFields(md, ['paymentReference', 'debitPhone', 'originBank', 'trxDate']);
 
+    // Las mismas normalizaciones que en `pagoMovil` (creación): Sitef debe recibir
+    // EXACTAMENTE los mismos valores para cruzar la transacción, o el polling no la encuentra.
     const { response } = await this.client.post('/s4/sitefAuth/getBusquedaSitef', creds, {
       amount,
-      paymentreference: md.paymentReference,
-      debitphone: md.debitPhone,
+      paymentreference: this.toPaymentReference(md.paymentReference),
+      debitphone: this.toInternationalPhone(md.debitPhone),
       origenbank: this.toBankCode(md.originBank),
       invoicenumber: invoiceNumber,
-      trxdate: md.trxDate,
+      trxdate: this.toSitefDate(md.trxDate),
       receivingbank: creds.acquirerBank,
     });
 
@@ -492,7 +494,7 @@ export class SitefAdapter extends PaymentGatewayPort {
       receivingbank: creds.acquirerBank,
       amount,
       invoicenumber: invoiceNumber,
-      trxdate: md.trxDate,
+      trxdate: this.toSitefDate(md.trxDate),
     });
 
     const tx = response.data?.transaction_list?.[0];
@@ -572,6 +574,51 @@ export class SitefAdapter extends PaymentGatewayPort {
     throw new BadRequestException(
       `Teléfono inválido: "${value}". Usa formato 04XXXXXXXXX (ej: 04120000000) o 584XXXXXXXXXX.`,
     );
+  }
+
+  /**
+   * Normaliza la referencia de pago al formato que matchea Sitef: hasta 8 dígitos.
+   * Muchos bancos devuelven referencias de 10-12 dígitos, pero Sitef solo cruza por los
+   * ÚLTIMOS 8 — si mandamos más, rechaza con "Error en el campo PaymentReference".
+   * Quita separadores (espacios, guiones) y, si sobran dígitos, conserva los últimos 8.
+   */
+  private toPaymentReference(value: unknown): string {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new BadRequestException(`Referencia de pago inválida: ${value}`);
+    }
+    const digits = String(value).replace(/\D/g, '');
+    if (digits.length === 0) {
+      throw new BadRequestException(`Referencia de pago inválida: "${value}". Debe contener al menos un dígito.`);
+    }
+    return digits.length > 8 ? digits.slice(-8) : digits;
+  }
+
+  /**
+   * Normaliza cédula/RIF al formato que exige Sitef: letra de tipo + dígitos (ej. "V30749551").
+   * Acepta entradas con separadores ("V-30.749.551", "v 30749551"). Si viene solo el número,
+   * asume "V" (cédula venezolana, el caso más común). Prefijos válidos: V/E/J/P/G.
+   */
+  private toIdentityDocument(value: unknown): string {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new BadRequestException(`Documento de identidad inválido: ${value}`);
+    }
+    const cleaned = String(value)
+      .toUpperCase()
+      .replace(/[^VEJPG0-9]/g, '');
+    const withPrefix = /^[VEJPG]/.test(cleaned) ? cleaned : `V${cleaned}`;
+    if (!/^[VEJPG]\d{5,12}$/.test(withPrefix)) {
+      throw new BadRequestException(
+        `Documento de identidad inválido: "${value}". Usa formato V12345678 (V/E/J/P/G + dígitos).`,
+      );
+    }
+    return withPrefix;
+  }
+
+  /** Valida/normaliza la fecha de transacción al formato que exige Sitef (YYYY-MM-DD). */
+  private toSitefDate(value: unknown): string {
+    const s = String(value ?? '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    throw new BadRequestException(`Fecha de transacción inválida: "${value}". Usa formato YYYY-MM-DD.`);
   }
 
   private requireFields(md: MethodData, fields: string[]): void {

@@ -86,22 +86,31 @@ export class InvoicesService {
   }
 
   /**
-   * Marca invoice como `paid`. Si `em` se provee, usa ese EntityManager (para
-   * meter el update dentro de una transacción del caller — patrón outbox).
-   * Sin `em`, transacción implícita del repository.
+   * Transición idempotente y atómica a `paid` (compare-and-swap a nivel DB).
+   *
+   * El UPDATE condicional `status <> 'paid'` serializa la concurrencia: ante dos
+   * llamadas simultáneas, el row-lock de Postgres deja que solo una afecte la fila
+   * (`transitioned=true`); la otra, al reevaluar el WHERE sobre la fila ya en `paid`,
+   * afecta 0 filas → `transitioned=false`. El caller usa ese flag para NO duplicar
+   * efectos secundarios (webhook `invoice.paid`, avance de la suscripción).
+   *
+   * Debe invocarse dentro de una transacción (`em`) para que el append al outbox que
+   * hace el caller comparta atomicidad con la transición.
    */
-  async markPaid(id: string, em?: EntityManager): Promise<Invoice> {
-    if (!em) {
-      return this.invoicesRepository.update(id, { status: 'paid', paidAt: new Date() });
-    }
+  async markPaid(id: string, em: EntityManager): Promise<{ invoice: Invoice; transitioned: boolean }> {
     const repo = em.getRepository(InvoiceEntity);
+    const res = await repo
+      .createQueryBuilder()
+      .update(InvoiceEntity)
+      .set({ status: 'paid', paidAt: new Date() })
+      .where('id = :id', { id })
+      .andWhere('status <> :paidStatus', { paidStatus: 'paid' })
+      .execute();
+    const transitioned = (res.affected ?? 0) > 0;
+
     const entity = await repo.findOne({ where: { id }, relations: ['items'] });
     if (!entity) throw new NotFoundException('Invoice not found');
-    entity.status = 'paid';
-    entity.paidAt = new Date();
-    // repo.save() no garantiza devolver relaciones — usar `entity` que ya las tiene cargadas.
-    await repo.save(entity);
-    return InvoiceMapper.toDomain(entity);
+    return { invoice: InvoiceMapper.toDomain(entity), transitioned };
   }
 
   async findById(id: string): Promise<Invoice> {
