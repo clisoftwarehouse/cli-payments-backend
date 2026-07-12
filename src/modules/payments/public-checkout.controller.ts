@@ -59,7 +59,7 @@ export class PublicCheckoutController {
   ): Promise<Payment> {
     // Validamos token (verify ya hace verify y throw si inválido)
     await this.invoices.findByCheckoutToken(token);
-    return this.payments.submitOtp(paymentId, dto.otp);
+    return this.payments.submitOtp(paymentId, dto.otp, dto.methodData);
   }
 
   @ApiOperation({ summary: 'Consultar status del pago (la landing polea hasta succeeded/failed).' })

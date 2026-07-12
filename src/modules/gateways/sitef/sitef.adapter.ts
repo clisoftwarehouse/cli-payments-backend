@@ -45,6 +45,8 @@ export class SitefAdapter extends PaymentGatewayPort {
         return this.pagoMovil(creds, input.invoiceNumber, amount, input.methodData);
       case 'card_ccr':
         return this.cardCcrCreate(creds, amount, input.methodData);
+      case 'card':
+        return this.mercantilCard(creds, input.invoiceNumber, amount, input.methodData);
       case 'web_button':
         return this.webButton(creds, input.invoiceNumber, amount, input.methodData);
       default:
@@ -57,6 +59,9 @@ export class SitefAdapter extends PaymentGatewayPort {
     const amount = this.parseAmount(input.amount);
     if (input.method === 'card_ccr') {
       return this.cardCcrFinalize(creds, amount, input.otp, input.methodData);
+    }
+    if (input.method === 'card') {
+      return this.mercantilDebitFinalize(creds, input.invoiceNumber, amount, input.otp, input.methodData);
     }
     return this.c2pExecuteWithOtp(creds, input.invoiceNumber, amount, input.otp, input.methodData);
   }
@@ -332,6 +337,140 @@ export class SitefAdapter extends PaymentGatewayPort {
       gatewayReference: orderId as string,
       failureCode: 'CCR_REJECTED',
       failureMessage: ccrResp.data?.data?.receipt?.result?.message ?? `Sitef CCR no aprobó el pago. status=${ccrResp.status}`,
+      rawRequest: request,
+      rawResponse,
+    };
+  }
+
+  // -- Card (Botón Mercantil) -----------------------------------------------
+
+  /**
+   * Botón de Pago Mercantil. El crédito (TDC) es un solo paso (`setPay`). El débito (TDD)
+   * son dos: `getAuth` dispara el segundo factor (OTP) y devuelve `requires_otp`; el débito
+   * se finaliza en `submitOtp` → `mercantilDebitFinalize` (`setPay` con `twofactor_auth`).
+   *
+   * PAN/CVV nunca se persisten: para el débito, el navegador retiene la tarjeta y la reenvía
+   * en el paso del OTP. `cardNumber`/`cvv` viajan como string (un número JSON de 16+ dígitos
+   * pierde precisión y un CVV "043" perdería el cero).
+   */
+  private async mercantilCard(
+    creds: SitefCredentials,
+    invoiceNumber: string,
+    amount: number,
+    md: MethodData,
+  ): Promise<CreatePaymentResult> {
+    this.requireFields(md, ['cardNumber', 'customerId']);
+
+    if (this.isDebitCard(md)) {
+      // Paso 1 (TDD): autenticación → dispara el OTP.
+      const { request, response } = await this.client.postCamel('/s4/sitefAuth/getAuth', creds, {
+        customerId: this.toIdentityDocument(md.customerId),
+        cardNumber: this.toCardNumber(md.cardNumber),
+        paymentMethod: 'TDD',
+      });
+      return this.mapMercantilAuthResult(response, request, response as unknown as Record<string, unknown>);
+    }
+
+    // TDC: un solo paso.
+    this.requireFields(md, ['expirationDate', 'cvv']);
+    const { request, response } = await this.client.postCamel('/s4/sitefAuth/setPay', creds, {
+      cardNumber: this.toCardNumber(md.cardNumber),
+      paymentMethod: 'TDC',
+      customerId: this.toIdentityDocument(md.customerId),
+      expirationDate: this.toCardExpiration(md.expirationDate),
+      cvv: this.toCvv(md.cvv),
+      invoiceNumber,
+      currency: 'VES',
+      amount,
+    });
+    return this.mapMercantilPayResult(response, request, response as unknown as Record<string, unknown>);
+  }
+
+  /** Paso 2 (TDD): `setPay` con el OTP como `twofactor_auth`. La tarjeta la reenvía el cliente. */
+  private async mercantilDebitFinalize(
+    creds: SitefCredentials,
+    invoiceNumber: string,
+    amount: number,
+    otp: string,
+    md: MethodData,
+  ): Promise<CreatePaymentResult> {
+    this.requireFields(md, ['cardNumber', 'customerId', 'expirationDate', 'cvv', 'accountType']);
+    const { request, response } = await this.client.postCamel('/s4/sitefAuth/setPay', creds, {
+      cardNumber: this.toCardNumber(md.cardNumber),
+      paymentMethod: 'TDD',
+      accountType: this.toAccountType(md.accountType),
+      customerId: this.toIdentityDocument(md.customerId),
+      expirationDate: this.toCardExpiration(md.expirationDate),
+      cvv: this.toCvv(md.cvv),
+      invoiceNumber,
+      currency: 'VES',
+      amount,
+      twofactor_auth: String(otp ?? '').replace(/\D/g, ''),
+    });
+    return this.mapMercantilPayResult(response, request, response as unknown as Record<string, unknown>);
+  }
+
+  /** getAuth (TDD): autenticación aprobada → `requires_otp`. */
+  private mapMercantilAuthResult(
+    r: SitefOperationResponse,
+    request: Record<string, unknown>,
+    rawResponse: Record<string, unknown>,
+  ): CreatePaymentResult {
+    const sitefError = r.data?.error_list?.[0];
+    if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
+
+    const auth = r.data?.authentication_info;
+    if (auth && (auth.trx_status ?? '').toLowerCase() === 'approved') {
+      return { status: 'requires_otp', gatewayReference: null, rawRequest: request, rawResponse };
+    }
+    return {
+      status: 'failed',
+      gatewayReference: null,
+      failureCode: 'MERCANTIL_AUTH_FAILED',
+      failureMessage: auth?.trx_status ?? 'Mercantil no pudo iniciar la autenticación de la tarjeta.',
+      rawRequest: request,
+      rawResponse,
+    };
+  }
+
+  /** setPay (TDC/TDD): `trx_status === 'approved'` → succeeded. */
+  private mapMercantilPayResult(
+    r: SitefOperationResponse,
+    request: Record<string, unknown>,
+    rawResponse: Record<string, unknown>,
+  ): CreatePaymentResult {
+    const sitefError = r.data?.error_list?.[0];
+    if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
+
+    const tx = r.data?.transaction_response;
+    if (tx && (tx.trx_status ?? '').toLowerCase() === 'approved') {
+      return {
+        status: 'succeeded',
+        gatewayReference: tx.payment_reference?.toString() ?? null,
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+    return {
+      status: 'failed',
+      gatewayReference: tx?.payment_reference?.toString() ?? null,
+      failureCode: tx?.trx_internal_status ? `MERCANTIL_${tx.trx_internal_status}` : 'MERCANTIL_REJECTED',
+      failureMessage: tx?.trx_status ?? 'Mercantil rechazó el pago con tarjeta.',
+      rawRequest: request,
+      rawResponse,
+    };
+  }
+
+  private mercantilError(
+    err: { error_code?: string; description?: string },
+    request: Record<string, unknown>,
+    rawResponse: Record<string, unknown>,
+  ): CreatePaymentResult {
+    return {
+      status: 'failed',
+      gatewayReference: null,
+      failureCode: `MERCANTIL_${err.error_code ?? 'ERROR'}`,
+      failureMessage: err.description ?? 'Mercantil rechazó la transacción.',
       rawRequest: request,
       rawResponse,
     };
@@ -619,6 +758,58 @@ export class SitefAdapter extends PaymentGatewayPort {
     const s = String(value ?? '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     throw new BadRequestException(`Fecha de transacción inválida: "${value}". Usa formato YYYY-MM-DD.`);
+  }
+
+  private isDebitCard(md: MethodData): boolean {
+    const t = String(md.cardType ?? '').toLowerCase();
+    return t === 'debit' || t === 'tdd' || t === 'debito' || t === 'débito';
+  }
+
+  /** Número de tarjeta → solo dígitos (13-19). Se envía como string para no perder precisión. */
+  private toCardNumber(value: unknown): string {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    if (digits.length < 13 || digits.length > 19) {
+      throw new BadRequestException('Número de tarjeta inválido.');
+    }
+    return digits;
+  }
+
+  /** Vencimiento → "YYYY/MM" (lo que exige Mercantil). Acepta MM/YY, MM/YYYY, YYYY/MM y con "-". */
+  private toCardExpiration(value: unknown): string {
+    const m = String(value ?? '')
+      .trim()
+      .match(/^(\d{2}|\d{4})\s*[/-]\s*(\d{2}|\d{4})$/);
+    if (!m) throw new BadRequestException('Fecha de vencimiento inválida. Usa formato YYYY/MM.');
+    const [, a, b] = m;
+    let year: string;
+    let month: string;
+    if (a.length === 4) {
+      year = a;
+      month = b;
+    } else if (b.length === 4) {
+      year = b;
+      month = a;
+    } else {
+      // Ambos de 2 dígitos → se asume MM/YY.
+      month = a;
+      year = `20${b}`;
+    }
+    const mm = parseInt(month, 10);
+    if (mm < 1 || mm > 12) throw new BadRequestException('Mes de vencimiento inválido.');
+    return `${year}/${month.padStart(2, '0')}`;
+  }
+
+  /** CVV → string de 3-4 dígitos (string para conservar ceros a la izquierda, ej. "043"). */
+  private toCvv(value: unknown): string {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    if (digits.length < 3 || digits.length > 4) throw new BadRequestException('CVV inválido.');
+    return digits;
+  }
+
+  private toAccountType(value: unknown): string {
+    const t = String(value ?? '').toUpperCase();
+    if (t === 'CC' || t === 'CA') return t;
+    throw new BadRequestException('Tipo de cuenta inválido. Usa CC (corriente) o CA (ahorro).');
   }
 
   private requireFields(md: MethodData, fields: string[]): void {
