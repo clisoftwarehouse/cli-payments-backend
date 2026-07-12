@@ -24,12 +24,40 @@ export type SitefTransactionC2pResponse = {
   payment_reference?: number | string;
 };
 
+/** Respuesta de `setPay` (Botón Mercantil, TDC y TDD). */
+export type SitefTransactionResponse = {
+  processing_date: string;
+  trx_status: string; // "approved" | "rejected" | ...
+  trx_type: string; // "compra"
+  payment_method: string; // "TDC" | "TDD"
+  payment_reference?: number | string;
+  invoice_number?: string;
+  amount?: number;
+  currency?: string;
+  trx_internal_status?: string; // "00" = ok
+  authorization_code?: string;
+};
+
+/** Respuesta de `getAuth` (Botón Mercantil TDD — reto de segundo factor). */
+export type SitefAuthenticationInfo = {
+  processing_date: string;
+  trx_status: string; // "approved" = autenticación iniciada (OTP enviado)
+  trx_type: string;
+  payment_method: string; // "TDD"
+  twofactor_type?: string; // "otp"
+  twoFactorLabel?: string;
+  twoFactorFieldType?: string; // "numeric"
+  twoFactorLenght?: number; // longitud del OTP (ej. 8)
+};
+
 export type SitefOperationResponse = {
   code?: number;
   status?: string;
   data: {
     merchant_identify: SitefMerchantIdentify;
     transaction_c2p_response?: SitefTransactionC2pResponse;
+    transaction_response?: SitefTransactionResponse;
+    authentication_info?: SitefAuthenticationInfo;
     transaction_list?: Array<{
       trx_date: string;
       trx_type: string;

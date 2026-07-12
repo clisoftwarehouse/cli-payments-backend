@@ -1,4 +1,4 @@
-export type PaymentMethodKind = 'c2p' | 'transfer' | 'web_button' | 'zelle' | 'pago_movil' | 'card_ccr';
+export type PaymentMethodKind = 'c2p' | 'transfer' | 'web_button' | 'zelle' | 'pago_movil' | 'card_ccr' | 'card';
 
 export type CreatePaymentInput = {
   applicationId: string;
@@ -24,7 +24,7 @@ export type CreatePaymentResult = {
 
 export type SubmitOtpInput = {
   applicationId: string;
-  method: 'c2p' | 'card_ccr';
+  method: 'c2p' | 'card_ccr' | 'card';
   invoiceNumber: string;
   amount: string;
   otp: string;

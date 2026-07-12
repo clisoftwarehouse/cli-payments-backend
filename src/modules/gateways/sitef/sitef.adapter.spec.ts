@@ -10,6 +10,7 @@ import { MerchantTerminalsService } from '@/modules/merchant-terminals/merchant-
  */
 describe('SitefAdapter — normalización de campos Sitef', () => {
   let postMock: jest.Mock;
+  let postCamelMock: jest.Mock;
   let adapter: SitefAdapter;
 
   // Respuesta que satisface tanto a mapTransactionListResult (transaction_list) como a
@@ -22,6 +23,8 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
   };
 
   const lastBody = (): Record<string, unknown> => postMock.mock.calls.at(-1)![2] as Record<string, unknown>;
+  const lastCamelBody = (): Record<string, unknown> => postCamelMock.mock.calls.at(-1)![2] as Record<string, unknown>;
+  const lastCamelPath = (): string => postCamelMock.mock.calls.at(-1)![0] as string;
 
   beforeEach(() => {
     postMock = jest.fn((_path: string, _creds: unknown, body: Record<string, unknown>) => ({
@@ -29,7 +32,19 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       response: okResponse,
     }));
 
-    const client = { post: postMock, postCamel: jest.fn() } as unknown as SitefClient;
+    // Mercantil usa postCamel. Respuesta combinada: authentication_info (getAuth → requires_otp)
+    // + transaction_response (setPay → succeeded); cada mapper mira solo el campo que le toca.
+    postCamelMock = jest.fn((_path: string, _creds: unknown, body: Record<string, unknown>) => ({
+      request: body,
+      response: {
+        data: {
+          authentication_info: { trx_status: 'approved', twofactor_type: 'otp', twoFactorLenght: 8 },
+          transaction_response: { trx_status: 'approved', payment_reference: 'MERC123' },
+        },
+      },
+    }));
+
+    const client = { post: postMock, postCamel: postCamelMock } as unknown as SitefClient;
     const terminals = {
       resolveForApplication: jest.fn(() => ({
         sitefUsername: 'cobeca',
@@ -183,6 +198,113 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
           },
         }),
       ).rejects.toThrow(/Teléfono inválido/);
+    });
+  });
+
+  describe('card (Botón Mercantil)', () => {
+    it('should procesar crédito (TDC) en un solo setPay con los campos normalizados', async () => {
+      const r = await adapter.createPayment({
+        applicationId: 'app1',
+        method: 'card',
+        invoiceNumber: 'CLI-9',
+        amount: '10.00',
+        methodData: {
+          cardType: 'credit',
+          cardNumber: '5897-8754-2135-4688',
+          expirationDate: '11/27',
+          cvv: '043',
+          customerId: '30749551',
+        },
+      });
+      const body = lastCamelBody();
+      expect(lastCamelPath()).toBe('/s4/sitefAuth/setPay');
+      expect(body.paymentMethod).toBe('TDC');
+      expect(body.cardNumber).toBe('5897875421354688');
+      expect(body.expirationDate).toBe('2027/11');
+      expect(body.cvv).toBe('043'); // string: conserva el cero a la izquierda
+      expect(body.customerId).toBe('V30749551');
+      expect(body.currency).toBe('VES');
+      expect(body.accountType).toBeUndefined();
+      expect(r.status).toBe('succeeded');
+    });
+
+    it('should autenticar débito (TDD) con getAuth y devolver requires_otp sin CVV', async () => {
+      const r = await adapter.createPayment({
+        applicationId: 'app1',
+        method: 'card',
+        invoiceNumber: 'CLI-10',
+        amount: '10.00',
+        methodData: { cardType: 'debit', cardNumber: '5897875421354688', customerId: 'V30749551' },
+      });
+      const body = lastCamelBody();
+      expect(lastCamelPath()).toBe('/s4/sitefAuth/getAuth');
+      expect(body.paymentMethod).toBe('TDD');
+      expect(body.cvv).toBeUndefined();
+      expect(r.status).toBe('requires_otp');
+    });
+
+    it('should finalizar débito en submitOtp con setPay + twofactor_auth y tipo de cuenta', async () => {
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'card',
+        invoiceNumber: 'CLI-10',
+        amount: '10.00',
+        otp: '80098630',
+        methodData: {
+          cardNumber: '5897875421354688',
+          customerId: 'V30749551',
+          expirationDate: '2027/11',
+          cvv: '123',
+          accountType: 'CA',
+        },
+      });
+      const body = lastCamelBody();
+      expect(lastCamelPath()).toBe('/s4/sitefAuth/setPay');
+      expect(body.paymentMethod).toBe('TDD');
+      expect(body.twofactor_auth).toBe('80098630');
+      expect(body.accountType).toBe('CA');
+      expect(r.status).toBe('succeeded');
+    });
+
+    it('should mapear error_list de Mercantil a failed exponiendo código y descripción', async () => {
+      postCamelMock.mockImplementationOnce((_path: string, _creds: unknown, body: Record<string, unknown>) => ({
+        request: body,
+        response: { data: { error_list: [{ error_code: '80', description: 'Numero de tarjeta incorrecto' }] } },
+      }));
+      const r = await adapter.createPayment({
+        applicationId: 'app1',
+        method: 'card',
+        invoiceNumber: 'CLI-11',
+        amount: '10.00',
+        methodData: {
+          cardType: 'credit',
+          cardNumber: '5897875421354688',
+          expirationDate: '2027/11',
+          cvv: '123',
+          customerId: 'V30749551',
+        },
+      });
+      expect(r.status).toBe('failed');
+      expect(r.failureCode).toBe('MERCANTIL_80');
+      expect(r.failureMessage).toBe('Numero de tarjeta incorrecto');
+    });
+
+    it('should rechazar número de tarjeta y CVV inválidos', async () => {
+      await expect(
+        adapter.createPayment({
+          applicationId: 'app1',
+          method: 'card',
+          invoiceNumber: 'CLI-12',
+          amount: '10.00',
+          methodData: {
+            cardType: 'credit',
+            cardNumber: '123',
+            expirationDate: '2027/11',
+            cvv: '123',
+            customerId: 'V30749551',
+          },
+        }),
+      ).rejects.toThrow(/tarjeta/i);
     });
   });
 });

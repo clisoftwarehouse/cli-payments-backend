@@ -82,7 +82,9 @@ export class PaymentsService {
         fxRateDate: invoice.fxRateDate,
         chargedCurrency: invoice.chargedCurrency,
         chargedAmount: invoice.chargedAmount,
-        methodData: dto.methodData,
+        // El gateway recibe dto.methodData completo; en la fila solo persistimos lo no
+        // sensible (nunca PAN/CVV — ver sanitizeMethodDataForStorage).
+        methodData: this.sanitizeMethodDataForStorage(dto.method, dto.methodData),
       }),
     );
 
@@ -172,26 +174,31 @@ export class PaymentsService {
   }
 
   /** Submit OTP para un payment C2P pendiente. */
-  async submitOtp(paymentId: string, otp: string): Promise<Payment> {
+  async submitOtp(
+    paymentId: string,
+    otp: string,
+    extraMethodData?: Record<string, unknown>,
+  ): Promise<Payment> {
     const payment = await this.paymentsRepo.findOne({ where: { id: paymentId } });
     if (!payment) throw new NotFoundException('Payment not found');
     if (payment.status !== 'requires_otp') {
       throw new BadRequestException(`Payment en estado ${payment.status} no acepta OTP.`);
     }
-    if (payment.methodKind !== 'c2p' && payment.methodKind !== 'card_ccr') {
-      throw new BadRequestException('OTP solo aplica a los métodos C2P y tarjeta CCR.');
+    if (payment.methodKind !== 'c2p' && payment.methodKind !== 'card_ccr' && payment.methodKind !== 'card') {
+      throw new BadRequestException('OTP solo aplica a los métodos C2P y tarjeta.');
     }
 
     const invoice = payment.invoiceId ? await this.invoices.findById(payment.invoiceId) : null;
 
     const result = await this.gateway.submitOtp({
       applicationId: payment.applicationId,
-      method: payment.methodKind as 'c2p' | 'card_ccr',
+      method: payment.methodKind as 'c2p' | 'card_ccr' | 'card',
       invoiceNumber: invoice?.number ?? payment.id,
       amount: this.amountForGateway(payment),
       otp,
       methodData: {
         ...(payment.methodData ?? {}),
+        ...(extraMethodData ?? {}), // tarjeta reenviada (débito Mercantil); no se persiste
         gatewayReference: payment.gatewayReference, // orderId para CCR step 2
       } as Record<string, unknown>,
     });
@@ -500,6 +507,25 @@ export class PaymentsService {
       month: '2-digit',
       day: '2-digit',
     }).format(new Date());
+  }
+
+  /**
+   * Lo que se persiste en `payments.method_data`. Para tarjeta (Mercantil) NUNCA guardamos
+   * PAN/CVV/vencimiento: solo el tipo, la cédula, el tipo de cuenta y los últimos 4 dígitos
+   * (para mostrar/auditar). El gateway sí recibe la tarjeta completa, en tránsito.
+   */
+  private sanitizeMethodDataForStorage(
+    method: PaymentMethodKind,
+    md: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (method !== 'card') return md;
+    const digits = String(md.cardNumber ?? '').replace(/\D/g, '');
+    return {
+      cardType: md.cardType,
+      customerId: md.customerId,
+      accountType: md.accountType,
+      cardLast4: digits.length >= 4 ? digits.slice(-4) : undefined,
+    };
   }
 
   private toDomain(entity: PaymentEntity): Payment {

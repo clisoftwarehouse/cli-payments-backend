@@ -92,6 +92,15 @@ export class SitefClient {
     if (typeof masked.token === 'string') {
       masked.token = `${(masked.token as string).slice(0, 6)}…`;
     }
+    // Nunca guardar en crudo datos sensibles de tarjeta (raw_request de payment_attempts,
+    // logs). Del PAN solo se conservan los últimos 4; CVV / 2FO / vencimiento se ocultan.
+    if (masked.cardNumber != null) {
+      const digits = String(masked.cardNumber).replace(/\D/g, '');
+      masked.cardNumber = digits.length >= 4 ? `••••${digits.slice(-4)}` : '••••';
+    }
+    for (const key of ['cvv', 'cvc', 'twofactor_auth', 'expirationDate']) {
+      if (masked[key] != null) masked[key] = '•••';
+    }
     return masked;
   }
 }

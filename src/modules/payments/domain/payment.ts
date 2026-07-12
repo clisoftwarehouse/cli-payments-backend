@@ -1,7 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export type PaymentStatus = 'pending' | 'requires_action' | 'requires_otp' | 'succeeded' | 'failed' | 'canceled';
-export type PaymentMethodKind = 'c2p' | 'transfer' | 'web_button' | 'zelle' | 'pago_movil' | 'card_ccr' | 'manual';
+export type PaymentMethodKind =
+  | 'c2p'
+  | 'transfer'
+  | 'web_button'
+  | 'zelle'
+  | 'pago_movil'
+  | 'card_ccr'
+  | 'card'
+  | 'manual';
 export type Gateway = 'sitef' | 'zelle_manual' | 'manual';
 
 export class Payment {
