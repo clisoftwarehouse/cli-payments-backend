@@ -128,15 +128,6 @@ export class InvoicePdfService implements OnModuleInit {
           ],
           columnGap: 0,
         },
-        ...(invoice.fxRateUsed
-          ? [
-              {
-                text: `Tasa de cambio aplicada: 1 ${invoice.displayCurrency} = ${this.fmtMoney(invoice.fxRateUsed)} ${invoice.chargedCurrency} (tasa BCV del ${invoice.fxRateDate}).`,
-                style: 'muted',
-                margin: [0, 12, 0, 0] as [number, number, number, number],
-              },
-            ]
-          : []),
         ...(invoice.notes
           ? [{ text: invoice.notes, style: 'muted', margin: [0, 15, 0, 0] as [number, number, number, number] }]
           : []),
