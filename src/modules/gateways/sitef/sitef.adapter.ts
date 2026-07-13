@@ -379,7 +379,7 @@ export class SitefAdapter extends PaymentGatewayPort {
       customerId: this.toIdentityDocument(md.customerId),
       expirationDate: this.toCardExpiration(md.expirationDate),
       cvv: this.toCvv(md.cvv),
-      invoiceNumber,
+      invoiceNumber: this.toMercantilInvoiceNumber(invoiceNumber),
       currency: 'VES',
       amount,
     });
@@ -402,7 +402,7 @@ export class SitefAdapter extends PaymentGatewayPort {
       customerId: this.toIdentityDocument(md.customerId),
       expirationDate: this.toCardExpiration(md.expirationDate),
       cvv: this.toCvv(md.cvv),
-      invoiceNumber,
+      invoiceNumber: this.toMercantilInvoiceNumber(invoiceNumber),
       currency: 'VES',
       amount,
       twofactor_auth: String(otp ?? '').replace(/\D/g, ''),
@@ -810,6 +810,18 @@ export class SitefAdapter extends PaymentGatewayPort {
     const t = String(value ?? '').toUpperCase();
     if (t === 'CC' || t === 'CA') return t;
     throw new BadRequestException('Tipo de cuenta inválido. Usa CC (corriente) o CA (ahorro).');
+  }
+
+  /**
+   * Mercantil limita `invoiceNumber` a 12 caracteres (error 0071). Nuestro correlativo
+   * `CLI-YYYY-NNNNNN` (15 chars) se compacta a solo dígitos (año + secuencia, único),
+   * capado a los últimos 12. Los demás métodos Sitef aceptan el número completo, así que
+   * esto SOLO aplica al Botón Mercantil.
+   */
+  private toMercantilInvoiceNumber(invoiceNumber: string): string {
+    const digits = String(invoiceNumber ?? '').replace(/\D/g, '');
+    const compact = digits.length > 0 ? digits : String(invoiceNumber ?? '').replace(/[^a-zA-Z0-9]/g, '');
+    return compact.length > 12 ? compact.slice(-12) : compact;
   }
 
   private requireFields(md: MethodData, fields: string[]): void {

@@ -206,7 +206,7 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       const r = await adapter.createPayment({
         applicationId: 'app1',
         method: 'card',
-        invoiceNumber: 'CLI-9',
+        invoiceNumber: 'CLI-2026-000038',
         amount: '10.00',
         methodData: {
           cardType: 'credit',
@@ -224,6 +224,9 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(body.cvv).toBe('043'); // string: conserva el cero a la izquierda
       expect(body.customerId).toBe('V30749551');
       expect(body.currency).toBe('VES');
+      // invoiceNumber compactado a ≤12 chars (Mercantil error 0071): CLI-2026-000038 → 2026000038
+      expect(body.invoiceNumber).toBe('2026000038');
+      expect(String(body.invoiceNumber).length).toBeLessThanOrEqual(12);
       expect(body.accountType).toBeUndefined();
       expect(r.status).toBe('succeeded');
     });
