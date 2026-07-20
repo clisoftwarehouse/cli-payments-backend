@@ -66,8 +66,16 @@ export class PaymentsService {
       return this.toDomain(existing);
     }
 
+    // Corta la reutilización ANTES de llamar a Sitef: si esta referencia ya pagó otra
+    // factura, no hay nada que verificar y el cliente recibe el motivo exacto.
+    const paymentReference = this.normalizeReference(dto.methodData?.paymentReference);
+    if (paymentReference) {
+      await this.assertReferenceUnused(invoice.applicationId, invoice.id, paymentReference);
+    }
+
     const payment = await this.paymentsRepo.save(
       this.paymentsRepo.create({
+        paymentReference,
         applicationId: invoice.applicationId,
         customerId: invoice.customerId,
         invoiceId: invoice.id,
@@ -259,7 +267,11 @@ export class PaymentsService {
       payment.status = 'succeeded';
       payment.gatewayReference = result.gatewayReference ?? payment.gatewayReference;
       payment.succeededAt = new Date();
-      await this.paymentsRepo.save(payment);
+      payment.paymentReference = payment.paymentReference ?? this.gatewayReferenceKey(result.gatewayReference);
+      if (!(await this.persistSettled(payment))) {
+        await this.emitPaymentFailed(await this.paymentsRepo.findOneOrFail({ where: { id: payment.id } }));
+        return { done: true };
+      }
       await this.onPaymentSucceeded(payment);
       return { done: true };
     }
@@ -343,6 +355,10 @@ export class PaymentsService {
       case 'succeeded':
         payment.status = 'succeeded';
         payment.succeededAt = new Date();
+        // Métodos sin referencia tecleada (C2P, tarjeta): la que identifica el movimiento
+        // es la que emite el gateway. Se guarda tal cual —no es input del cliente— para
+        // que el índice único también cubra estos métodos.
+        payment.paymentReference = payment.paymentReference ?? this.gatewayReferenceKey(result.gatewayReference);
         break;
       case 'requires_otp':
         payment.status = 'requires_otp';
@@ -359,16 +375,91 @@ export class PaymentsService {
         break;
     }
 
+    if (payment.status === 'succeeded') {
+      if (!(await this.persistSettled(payment))) {
+        // Perdió el índice único: la referencia ya acreditó otra factura.
+        await this.emitPaymentFailed(await this.paymentsRepo.findOneOrFail({ where: { id: payment.id } }));
+        return;
+      }
+      await this.onPaymentSucceeded(payment);
+      return;
+    }
+
     await this.paymentsRepo.save(payment);
 
-    if (payment.status === 'succeeded') {
-      await this.onPaymentSucceeded(payment);
-    } else if (payment.status === 'failed') {
+    if (payment.status === 'failed') {
       await this.emitPaymentFailed(payment);
     } else if (payment.status === 'requires_action') {
       // Web Button: hay que polear hasta resolver.
       await this.schedulePolling(payment.id, 0);
     }
+  }
+
+  /**
+   * Normaliza la referencia tecleada por el cliente igual que el adapter (últimos 8 dígitos).
+   * Debe coincidir con `toPaymentReference`: si aquí guardáramos los 10 dígitos completos y
+   * allá mandáramos 8, alguien podría re-acreditar el mismo movimiento anteponiendo dígitos.
+   */
+  private normalizeReference(value: unknown): string | null {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    const digits = String(value).replace(/\D/g, '');
+    if (digits.length === 0) return null;
+    return digits.length > 8 ? digits.slice(-8) : digits;
+  }
+
+  /** Referencia emitida por el gateway: se usa tal cual (no es input del cliente). */
+  private gatewayReferenceKey(value: string | null | undefined): string | null {
+    const trimmed = (value ?? '').trim();
+    return trimmed.length > 0 ? trimmed.slice(0, 32) : null;
+  }
+
+  /**
+   * Rechaza reutilizar una referencia ya acreditada. Se consulta por aplicación (cada
+   * comercio tiene su propio universo de referencias) y se ignora la propia factura, para
+   * no romper el reintento legítimo sobre el mismo cobro.
+   */
+  private async assertReferenceUnused(applicationId: string, invoiceId: string, reference: string): Promise<void> {
+    const clash = await this.paymentsRepo.findOne({
+      where: { applicationId, paymentReference: reference, status: 'succeeded' },
+    });
+    if (clash && clash.invoiceId !== invoiceId) {
+      throw new ConflictException(
+        `Esta referencia ya fue usada para pagar otra factura. Cada pago solo puede acreditarse una vez.`,
+      );
+    }
+  }
+
+  /**
+   * Guarda el pago liquidado. El índice único parcial es el árbitro final del doble-cobro:
+   * si otra fila ya acreditó esta referencia (dos pestañas en paralelo, o un poll que llega
+   * tarde), Postgres rechaza la escritura y el pago queda `failed` con el motivo — en vez
+   * de otorgar la misma factura dos veces. Devuelve false si perdió la carrera.
+   */
+  private async persistSettled(payment: PaymentEntity): Promise<boolean> {
+    try {
+      await this.paymentsRepo.save(payment);
+      return true;
+    } catch (err) {
+      if (!this.isDuplicateReferenceViolation(err)) throw err;
+      this.logger.warn(
+        `Referencia ${payment.paymentReference} ya acreditada en app ${payment.applicationId} — pago ${payment.id} rechazado.`,
+      );
+      await this.paymentsRepo.update(payment.id, {
+        status: 'failed',
+        failureCode: 'REFERENCE_ALREADY_USED',
+        failureMessage: 'Esta referencia ya fue usada para pagar otra factura.',
+        failedAt: new Date(),
+        succeededAt: null,
+      });
+      return false;
+    }
+  }
+
+  private isDuplicateReferenceViolation(err: unknown): boolean {
+    const e = err as { code?: string; constraint?: string; driverError?: { code?: string; constraint?: string } };
+    const code = e?.code ?? e?.driverError?.code;
+    const constraint = e?.constraint ?? e?.driverError?.constraint;
+    return code === '23505' && constraint === 'UQ_payment_reference_settled';
   }
 
   private async onPaymentSucceeded(payment: PaymentEntity): Promise<void> {

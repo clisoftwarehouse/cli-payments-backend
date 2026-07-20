@@ -35,20 +35,7 @@ export class SitefClient {
       ...body,
     };
 
-    try {
-      const response = await axios.post<SitefOperationResponse>(url, fullBody, {
-        timeout: config.timeoutMs,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: bearer,
-        },
-      });
-      return { request: this.maskRequest(fullBody), response: response.data };
-    } catch (err) {
-      const axErr = err as AxiosError<SitefOperationResponse>;
-      this.logger.error(`Sitef ${path} fallo: ${axErr.message} ${JSON.stringify(axErr.response?.data ?? {})}`);
-      throw err;
-    }
+    return this.execute(path, url, fullBody, bearer, config.timeoutMs);
   }
 
   /** Igual que post() pero inyecta idBranch/codeStall (camelCase) en lugar de idbranch/codestall.
@@ -71,9 +58,29 @@ export class SitefClient {
       ...body,
     };
 
+    return this.execute(path, url, fullBody, bearer, config.timeoutMs);
+  }
+
+  /**
+   * Un 4xx de Sitef NO es un fallo de transporte: el body trae el motivo redactado para el
+   * cliente final (`messages[]`, `data.error_list[]`) — ej. 400 + "Banco emisor no autorizado
+   * para débito inmediato". Antes se propagaba la excepción de axios y ese texto se perdía,
+   * dejando al cliente con un 500 genérico nuestro. Ahora el body se devuelve como respuesta
+   * normal para que los mappers lo conviertan en un `failed` con el mensaje de Sitef.
+   *
+   * Solo se relanza lo que de verdad es un fallo de transporte (timeout, DNS, 5xx, body no
+   * interpretable): ahí no hay mensaje de Sitef que mostrar y el reintento sí tiene sentido.
+   */
+  private async execute(
+    path: string,
+    url: string,
+    fullBody: Record<string, unknown>,
+    bearer: string,
+    timeoutMs: number,
+  ): Promise<{ request: Record<string, unknown>; response: SitefOperationResponse }> {
     try {
       const response = await axios.post<SitefOperationResponse>(url, fullBody, {
-        timeout: config.timeoutMs,
+        timeout: timeoutMs,
         headers: {
           'Content-Type': 'application/json',
           Authorization: bearer,
@@ -82,9 +89,21 @@ export class SitefClient {
       return { request: this.maskRequest(fullBody), response: response.data };
     } catch (err) {
       const axErr = err as AxiosError<SitefOperationResponse>;
-      this.logger.error(`Sitef ${path} fallo: ${axErr.message} ${JSON.stringify(axErr.response?.data ?? {})}`);
+      const status = axErr.response?.status;
+      const data = axErr.response?.data;
+      this.logger.error(`Sitef ${path} fallo (HTTP ${status ?? '—'}): ${axErr.message} ${JSON.stringify(data ?? {})}`);
+
+      if (status && status >= 400 && status < 500 && this.hasSitefReason(data)) {
+        return { request: this.maskRequest(fullBody), response: data! };
+      }
       throw err;
     }
+  }
+
+  /** ¿El body trae un motivo de Sitef que podamos mostrarle al cliente? */
+  private hasSitefReason(data: SitefOperationResponse | undefined): boolean {
+    if (!data || typeof data !== 'object') return false;
+    return (data.messages?.length ?? 0) > 0 || (data.data?.error_list?.length ?? 0) > 0;
   }
 
   private maskRequest(body: Record<string, unknown>): Record<string, unknown> {

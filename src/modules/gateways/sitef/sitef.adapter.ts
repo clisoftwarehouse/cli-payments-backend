@@ -130,8 +130,22 @@ export class SitefAdapter extends PaymentGatewayPort {
   private mapC2pResult(
     trx: SitefTransactionC2pResponse | undefined,
     request: Record<string, unknown>,
-    response: Record<string, unknown>,
+    response: SitefOperationResponse,
   ): CreatePaymentResult {
+    // Un `messages[]` raíz (ej. "Transaccion duplicada") invalida la respuesta completa,
+    // aunque venga con transaction_c2p_response en estado approved.
+    const rejection = this.sitefRejection(response);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: trx?.payment_reference?.toString() ?? null,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
+        rawRequest: request,
+        rawResponse: response as unknown as Record<string, unknown>,
+      };
+    }
+
     if (!trx) {
       // Sitef respondió 200 pero sin el shape esperado — extraer cualquier info útil del body.
       const r = response as { code?: unknown; status?: unknown; message?: unknown; data?: unknown; error?: unknown };
@@ -205,6 +219,8 @@ export class SitefAdapter extends PaymentGatewayPort {
       trxdate: this.toSitefDate(md.trxDate),
     });
 
+    // getTrfSitef no recibe invoicenumber, así que no hay cruce de factura que validar aquí:
+    // la reutilización de una transferencia la ataja el guard de referencia en PaymentsService.
     return this.mapTransactionListResult(response, request, response as unknown as Record<string, unknown>);
   }
 
@@ -230,7 +246,12 @@ export class SitefAdapter extends PaymentGatewayPort {
       receivingbank: creds.acquirerBank,
     });
 
-    return this.mapTransactionListResult(response, request, response as unknown as Record<string, unknown>);
+    return this.mapTransactionListResult(
+      response,
+      request,
+      response as unknown as Record<string, unknown>,
+      invoiceNumber,
+    );
   }
 
   // -- Card CCR (Credicard) -------------------------------------------------
@@ -419,6 +440,18 @@ export class SitefAdapter extends PaymentGatewayPort {
     const sitefError = r.data?.error_list?.[0];
     if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
 
+    const rejection = this.sitefRejection(r);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
     const auth = r.data?.authentication_info;
     if (auth && (auth.trx_status ?? '').toLowerCase() === 'approved') {
       return { status: 'requires_otp', gatewayReference: null, rawRequest: request, rawResponse };
@@ -441,6 +474,18 @@ export class SitefAdapter extends PaymentGatewayPort {
   ): CreatePaymentResult {
     const sitefError = r.data?.error_list?.[0];
     if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
+
+    const rejection = this.sitefRejection(r);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
+        rawRequest: request,
+        rawResponse,
+      };
+    }
 
     const tx = r.data?.transaction_response;
     if (tx && (tx.trx_status ?? '').toLowerCase() === 'approved') {
@@ -482,6 +527,7 @@ export class SitefAdapter extends PaymentGatewayPort {
     r: SitefOperationResponse,
     request: Record<string, unknown>,
     rawResponse: Record<string, unknown>,
+    expectedInvoiceNumber?: string,
   ): CreatePaymentResult {
     // Sitef devuelve error_list cuando un campo es inválido (ej. referencia mal formada).
     // Hay que exponerlo en vez de enmascararlo como un genérico NOT_FOUND.
@@ -492,6 +538,22 @@ export class SitefAdapter extends PaymentGatewayPort {
         gatewayReference: null,
         failureCode: `SITEF_${sitefError.error_code ?? 'ERROR'}`,
         failureMessage: sitefError.description ?? 'Sitef rechazó la verificación.',
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
+    // `messages` a nivel raíz es un RECHAZO aunque venga acompañado de transaction_list:
+    // el caso real es "Transaccion duplicada" — Sitef devuelve la transacción original,
+    // ya consumida por otra factura. Sin este corte se aprobaba el cobro por segunda vez.
+    // Fail-closed a propósito: ante un aviso que no sabemos interpretar, no se otorga nada.
+    const rejection = this.sitefRejection(r);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
         rawRequest: request,
         rawResponse,
       };
@@ -508,11 +570,54 @@ export class SitefAdapter extends PaymentGatewayPort {
         rawResponse,
       };
     }
+
+    // Segunda defensa: si Sitef ligó la transacción a OTRA factura, la referencia ya se usó
+    // aunque no haya mandado `messages`. Solo aplica cuando enviamos invoicenumber en el
+    // request (pago móvil sí, transferencia no) y Sitef lo devuelve.
+    const boundInvoice = (tx.invoice_number ?? '').trim();
+    if (expectedInvoiceNumber && boundInvoice && boundInvoice !== expectedInvoiceNumber) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: 'REFERENCE_ALREADY_USED',
+        failureMessage:
+          `Esta referencia ya fue usada para pagar la factura ${boundInvoice}. ` +
+          'Cada pago solo puede acreditarse una vez. Verifique el número de referencia.',
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
     return {
       status: 'succeeded',
       gatewayReference: tx.payment_reference?.toString() ?? null,
       rawRequest: request,
       rawResponse,
+    };
+  }
+
+  /**
+   * Traduce el `messages[]` raíz de Sitef a un rechazo. Los textos vienen redactados para
+   * el cliente final ("Transacción ya procesada anteriormente. Referencia: 744753"), así
+   * que se propagan tal cual a `failureMessage` y la landing los pinta en pantalla.
+   */
+  private sitefRejection(r: SitefOperationResponse): { code: string; message: string } | null {
+    const messages = (r.messages ?? []).filter((m) => m?.message || m?.field);
+    if (messages.length === 0) return null;
+
+    // Al cliente solo se le muestra `message` (ya viene redactado para él). `field` es el
+    // identificador técnico de Sitef ("issuingBank", "Transaccion duplicada"): sirve para
+    // clasificar el fallo y queda en el raw_response, pero no se pinta en pantalla.
+    const text = messages
+      .map((m) => m.message?.trim())
+      .filter((m): m is string => !!m)
+      .join(' ');
+    const isDuplicate = messages.some((m) => `${m.field ?? ''} ${m.message ?? ''}`.toLowerCase().includes('duplicad'));
+
+    this.logger.warn(`Sitef rechazó con messages[]: ${JSON.stringify(messages)}`);
+    return {
+      code: isDuplicate ? 'REFERENCE_ALREADY_USED' : 'SITEF_MESSAGE',
+      message: text || 'Sitef rechazó la operación.',
     };
   }
 
@@ -533,6 +638,18 @@ export class SitefAdapter extends PaymentGatewayPort {
       amount,
       invoicenumber: invoiceNumber,
     });
+
+    const rejection = this.sitefRejection(response);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: invoiceNumber,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
+        rawRequest: request,
+        rawResponse: response as unknown as Record<string, unknown>,
+      };
+    }
 
     const trx = response.data?.transaction_c2p_response;
     // En getAuthWeb la URL viene en payment_method.
@@ -608,17 +725,7 @@ export class SitefAdapter extends PaymentGatewayPort {
       receivingbank: creds.acquirerBank,
     });
 
-    const tx = response.data?.transaction_list?.[0];
-    if (!tx) {
-      return { status: 'pending', gatewayReference: null, rawResponse: response };
-    }
-
-    return {
-      status: 'succeeded',
-      gatewayReference: tx.payment_reference?.toString() ?? null,
-      authorizationCode: tx.authorization_code,
-      rawResponse: response,
-    };
+    return this.mapPollResult(response, invoiceNumber);
   }
 
   private async pollWebButton(
@@ -636,16 +743,52 @@ export class SitefAdapter extends PaymentGatewayPort {
       trxdate: this.toSitefDate(md.trxDate),
     });
 
-    const tx = response.data?.transaction_list?.[0];
+    return this.mapPollResult(response, invoiceNumber);
+  }
+
+  /**
+   * Mismos cortes que `mapTransactionListResult` pero en clave de polling: "no encontrada"
+   * es `pending` (aún puede aparecer), mientras que un rechazo explícito de Sitef o una
+   * factura cruzada es `failed` definitivo — reintentar no lo va a arreglar y dejarlo en
+   * pending haría que el worker terminara aprobando un pago ya consumido.
+   */
+  private mapPollResult(r: SitefOperationResponse, expectedInvoiceNumber: string): GatewayStatusResult {
+    const rawResponse = r as unknown as Record<string, unknown>;
+
+    const rejection = this.sitefRejection(r);
+    if (rejection) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: rejection.code,
+        failureMessage: rejection.message,
+        rawResponse,
+      };
+    }
+
+    const tx = r.data?.transaction_list?.[0];
     if (!tx) {
-      return { status: 'pending', gatewayReference: null, rawResponse: response };
+      return { status: 'pending', gatewayReference: null, rawResponse };
+    }
+
+    const boundInvoice = (tx.invoice_number ?? '').trim();
+    if (boundInvoice && boundInvoice !== expectedInvoiceNumber) {
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: 'REFERENCE_ALREADY_USED',
+        failureMessage:
+          `Esta referencia ya fue usada para pagar la factura ${boundInvoice}. ` +
+          'Cada pago solo puede acreditarse una vez.',
+        rawResponse,
+      };
     }
 
     return {
       status: 'succeeded',
       gatewayReference: tx.payment_reference?.toString() ?? null,
       authorizationCode: tx.authorization_code,
-      rawResponse: response,
+      rawResponse,
     };
   }
 

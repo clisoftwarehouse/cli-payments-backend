@@ -310,4 +310,148 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       ).rejects.toThrow(/tarjeta/i);
     });
   });
+  /**
+   * Regresión del doble-cobro: Sitef puede devolver `messages[]` a nivel raíz JUNTO a una
+   * transacción válida (la original, ya consumida por otra factura). Antes se leía solo
+   * `transaction_list` y el cobro se aprobaba por segunda vez.
+   */
+  describe('rechazos que Sitef reporta en messages[]', () => {
+    const pagoMovilData = {
+      paymentReference: '18744753',
+      debitPhone: '04146380056',
+      originBank: '0134',
+      trxDate: '2026-07-20',
+    };
+
+    const createPagoMovil = (invoiceNumber = 'CLI-2026-000048') =>
+      adapter.createPayment({
+        applicationId: 'app1',
+        method: 'pago_movil',
+        invoiceNumber,
+        amount: '6.71',
+        methodData: pagoMovilData,
+      });
+
+    it('should rechazar una transacción duplicada aunque venga con transaction_list', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: {
+            marcada: 'verified',
+            transaction_list: [{ payment_reference: 744753, invoice_number: 'CLI-2026-000044' }],
+          },
+          messages: [
+            { field: 'Transaccion duplicada', message: 'Transacción ya procesada anteriormente. Referencia: 744753' },
+          ],
+        },
+      });
+
+      const r = await createPagoMovil();
+
+      expect(r.status).toBe('failed');
+      expect(r.failureCode).toBe('REFERENCE_ALREADY_USED');
+      expect(r.failureMessage).toBe('Transacción ya procesada anteriormente. Referencia: 744753');
+    });
+
+    it('should mostrar solo `message`, nunca el `field` técnico de Sitef', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          code: 400,
+          status: 'Error',
+          data: {},
+          messages: [{ field: 'issuingBank', message: 'Banco emisor no autorizado para débito inmediato' }],
+        },
+      });
+
+      const r = await adapter.createPayment({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000045',
+        amount: '6.71',
+        methodData: {
+          destinationId: 'V30749551',
+          destinationMobileNumber: '04145380056',
+          destinationBank: '0105',
+        },
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureMessage).toBe('Banco emisor no autorizado para débito inmediato');
+      expect(r.failureMessage).not.toContain('issuingBank');
+    });
+
+    it('should rechazar cuando Sitef ligó la referencia a otra factura, sin messages[]', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { transaction_list: [{ payment_reference: 744753, invoice_number: 'CLI-2026-000044' }] },
+        },
+      });
+
+      const r = await createPagoMovil('CLI-2026-000048');
+
+      expect(r.status).toBe('failed');
+      expect(r.failureCode).toBe('REFERENCE_ALREADY_USED');
+      expect(r.failureMessage).toContain('CLI-2026-000044');
+    });
+
+    it('should aprobar cuando la factura devuelta por Sitef es la nuestra', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { transaction_list: [{ payment_reference: 744753, invoice_number: 'CLI-2026-000048' }] },
+        },
+      });
+
+      const r = await createPagoMovil('CLI-2026-000048');
+
+      expect(r.status).toBe('succeeded');
+    });
+
+    it('should marcar el poll como failed (no pending) ante un duplicado', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { transaction_list: [{ payment_reference: 744753, invoice_number: 'CLI-2026-000044' }] },
+          messages: [{ field: 'Transaccion duplicada', message: 'Transacción ya procesada anteriormente.' }],
+        },
+      });
+
+      const r = await adapter.getStatus({
+        applicationId: 'app1',
+        method: 'pago_movil',
+        invoiceNumber: 'CLI-2026-000048',
+        amount: '6.71',
+        methodData: pagoMovilData,
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureMessage).toBe('Transacción ya procesada anteriormente.');
+    });
+
+    it('should propagar el mensaje de Sitef en tarjeta Mercantil', async () => {
+      postCamelMock.mockResolvedValue({
+        request: {},
+        response: { data: {}, messages: [{ field: 'cardNumber', message: 'Tarjeta no afiliada al servicio' }] },
+      });
+
+      const r = await adapter.createPayment({
+        applicationId: 'app1',
+        method: 'card',
+        invoiceNumber: 'CLI-2026-000048',
+        amount: '6.71',
+        methodData: {
+          cardType: 'credit',
+          cardNumber: '4111111111111111',
+          expirationDate: '2027/11',
+          cvv: '123',
+          customerId: 'V30749551',
+        },
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureMessage).toBe('Tarjeta no afiliada al servicio');
+    });
+  });
 });
