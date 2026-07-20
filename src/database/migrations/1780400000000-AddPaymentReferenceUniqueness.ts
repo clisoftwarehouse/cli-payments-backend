@@ -36,7 +36,7 @@ export class AddPaymentReferenceUniqueness1780400000000 implements MigrationInte
           WHERE q."application_id" = p."application_id"
             AND q."payment_reference" = p."payment_reference"
             AND q."status" = 'succeeded'
-            AND (q."created_at", q."id") < (p."created_at", p."id")
+            AND (q."createdAt", q."id") < (p."createdAt", p."id")
         )
     `);
 
