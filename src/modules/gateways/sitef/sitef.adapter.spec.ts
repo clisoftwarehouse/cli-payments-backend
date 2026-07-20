@@ -144,7 +144,10 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       const body = lastBody();
       expect(body.destinationid).toBe('V30749551');
       expect(body.destinationmobilenumber).toBe('584146380056');
-      expect(body.destinationbank).toBe(102);
+      // El banco que teclea el cliente (0102) es el EMISOR → issuingbank.
+      expect(body.issuingbank).toBe(102);
+      // destinationbank = banco receptor del comercio (acquirerBank del terminal, 134 en el mock).
+      expect(body.destinationbank).toBe(134);
     });
   });
 
