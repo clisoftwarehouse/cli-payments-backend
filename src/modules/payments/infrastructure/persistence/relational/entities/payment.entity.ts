@@ -5,6 +5,14 @@ import { EntityRelationalHelper } from '@/common/utils/relational-entity-helper'
 
 @Entity({ name: 'payment' })
 @Index('UQ_payment_idempotency', ['applicationId', 'idempotencyKey'], { unique: true })
+// Una referencia bancaria solo puede acreditarse UNA vez por aplicación. Índice parcial:
+// solo restringe pagos ya liquidados, así los intentos fallidos con la misma referencia
+// (typos, reintentos) no bloquean el intento bueno. Es la garantía dura contra el
+// doble-cobro — vale aunque Sitef no marque la transacción como duplicada.
+@Index('UQ_payment_reference_settled', ['applicationId', 'paymentReference'], {
+  unique: true,
+  where: `status = 'succeeded' AND payment_reference IS NOT NULL`,
+})
 @Index('IDX_payment_invoice', ['invoiceId'])
 @Index('IDX_payment_status', ['status'])
 export class PaymentEntity extends EntityRelationalHelper {
@@ -34,6 +42,16 @@ export class PaymentEntity extends EntityRelationalHelper {
 
   @Column({ type: 'varchar', length: 120, nullable: true, name: 'gateway_reference' })
   gatewayReference: string | null;
+
+  /**
+   * Referencia bancaria NORMALIZADA (últimos 8 dígitos) que identifica el movimiento que
+   * paga esta factura. Es distinta de `gatewayReference`: esa la echa Sitef y a veces viene
+   * recortada (pedimos 18744753 y responde 744753), así que no sirve para deduplicar.
+   * Se llena con lo que tecleó el cliente (transferencia / pago móvil) o, si el método no
+   * pide referencia, con la que devuelve el gateway al liquidar.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true, name: 'payment_reference' })
+  paymentReference: string | null;
 
   @Column({ type: 'varchar', length: 4, name: 'display_currency' })
   displayCurrency: string;

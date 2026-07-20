@@ -50,9 +50,21 @@ export type SitefAuthenticationInfo = {
   twoFactorLenght?: number; // longitud del OTP (ej. 8)
 };
 
+/**
+ * Aviso a nivel raíz de la respuesta (hermano de `data`, NO dentro de él).
+ * Sitef lo usa para rechazos que igual devuelven `transaction_list`, el caso crítico
+ * siendo `field: "Transaccion duplicada"` — la referencia ya se consumió en otra factura.
+ * El `message` viene redactado para el cliente final: se muestra tal cual en pantalla.
+ */
+export type SitefMessage = {
+  field?: string;
+  message?: string;
+};
+
 export type SitefOperationResponse = {
   code?: number;
   status?: string;
+  messages?: SitefMessage[];
   data: {
     merchant_identify: SitefMerchantIdentify;
     transaction_c2p_response?: SitefTransactionC2pResponse;
