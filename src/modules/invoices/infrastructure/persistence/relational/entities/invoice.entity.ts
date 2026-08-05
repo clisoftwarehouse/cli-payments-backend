@@ -60,6 +60,12 @@ export class InvoiceEntity extends EntityRelationalHelper {
   @Column({ type: 'text', nullable: true, name: 'pdf_url' })
   pdfUrl: string | null;
 
+  // URL a la que la landing devuelve al cliente tras pagar (o si abandona). La fija el SaaS por
+  // el canal server-to-server (renew con API key), no un query param → no manipulable por el
+  // usuario. Nulo para facturas que no vienen de un checkout con retorno.
+  @Column({ type: 'text', nullable: true, name: 'return_url' })
+  returnUrl: string | null;
+
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 

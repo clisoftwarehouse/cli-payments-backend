@@ -37,6 +37,7 @@ export class InvoicesRelationalRepository implements InvoiceRepository {
       displayAmount: data.displayAmount,
       dueDate: data.dueDate ?? null,
       notes: data.notes ?? null,
+      returnUrl: data.returnUrl ?? null,
       items,
     });
 

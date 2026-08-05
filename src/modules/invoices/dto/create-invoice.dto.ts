@@ -4,6 +4,7 @@ import {
   Min,
   IsIn,
   IsInt,
+  IsUrl,
   IsUUID,
   IsArray,
   IsString,
@@ -71,4 +72,12 @@ export class CreateInvoiceDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://app.vitriona.com/dashboard/billing?checkout=success',
+    description: 'URL a la que la landing devuelve al cliente tras pagar. Debe incluir protocolo http(s).',
+  })
+  @IsUrl({ require_protocol: true, require_tld: false, protocols: ['http', 'https'] })
+  @IsOptional()
+  returnUrl?: string;
 }

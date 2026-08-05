@@ -9,6 +9,7 @@ export type InvoiceCreateInput = {
   displayAmount: string;
   dueDate?: string | null;
   notes?: string | null;
+  returnUrl?: string | null;
   items: Array<{
     productId?: string | null;
     description: string;

@@ -44,6 +44,7 @@ export class InvoicesService {
       displayAmount: total.toFixed(2),
       dueDate: dto.dueDate ?? null,
       notes: dto.notes ?? null,
+      returnUrl: dto.returnUrl ?? null,
       items,
     });
   }

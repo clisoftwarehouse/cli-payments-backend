@@ -22,6 +22,7 @@ export class InvoiceMapper {
     d.checkoutToken = raw.checkoutToken;
     d.checkoutTokenExpiresAt = raw.checkoutTokenExpiresAt;
     d.pdfUrl = raw.pdfUrl;
+    d.returnUrl = raw.returnUrl;
     d.notes = raw.notes;
     d.items = (raw.items ?? []).map(InvoiceMapper.itemToDomain);
     d.createdAt = raw.createdAt;

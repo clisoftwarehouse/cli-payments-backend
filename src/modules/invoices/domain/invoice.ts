@@ -82,6 +82,11 @@ export class Invoice {
   @ApiPropertyOptional()
   pdfUrl: string | null;
 
+  @ApiPropertyOptional({
+    description: 'URL de retorno al SaaS tras pagar. La fija el SaaS vía renew (canal API key).',
+  })
+  returnUrl: string | null;
+
   @ApiPropertyOptional()
   notes: string | null;
 

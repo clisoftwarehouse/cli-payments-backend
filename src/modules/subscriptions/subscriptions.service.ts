@@ -141,6 +141,7 @@ export class SubscriptionsService {
   async renew(
     id: string,
     triggeredBy: TriggeredBy = 'system',
+    returnUrl?: string,
   ): Promise<{ subscription: Subscription; invoice: Invoice }> {
     const sub = await this.requireById(id);
     if (sub.status !== 'active' && sub.status !== 'trialing' && sub.status !== 'past_due') {
@@ -159,6 +160,7 @@ export class SubscriptionsService {
       applicationId: sub.applicationId,
       customerId: sub.customerId,
       displayCurrency: product.priceCurrency,
+      returnUrl,
       items: [
         {
           productId: product.id,

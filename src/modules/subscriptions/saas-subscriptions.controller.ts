@@ -16,6 +16,7 @@ import { Subscription } from './domain/subscription';
 import { ChangePlanDto } from './dto/change-plan.dto';
 import { Invoice } from '@/modules/invoices/domain/invoice';
 import { SubscriptionsService } from './subscriptions.service';
+import { RenewSubscriptionDto } from './dto/renew-subscription.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
 import { CancelSubscriptionDto } from './dto/cancel-subscription.dto';
 import { CurrentApiKey } from '@/modules/auth-api-key/api-key.decorator';
@@ -66,18 +67,21 @@ export class SaasSubscriptionsController {
 
   @ApiOperation({
     summary: 'Iniciar renovación: genera Invoice + checkout token para el próximo período.',
-    description: 'NO mueve el estado de la subscription hasta que el invoice se pague.',
+    description:
+      'NO mueve el estado de la subscription hasta que el invoice se pague. Si se envía `returnUrl`, ' +
+      'la landing devolverá al cliente a esa URL tras pagar.',
   })
   @ApiOkResponse({ description: 'Invoice emitido para la renovación, con checkout_token incluido.', type: Invoice })
   @Post(':id/renew')
   async renew(
     @CurrentApiKey() apiKey: ApiKeyContext,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RenewSubscriptionDto,
   ): Promise<{ subscription: Subscription; invoice: Invoice }> {
     this.requireScope(apiKey, 'subscriptions:write');
     const sub = await this.service.findById(id);
     this.assertOwnership(apiKey, sub.applicationId);
-    return this.service.renew(id, 'customer');
+    return this.service.renew(id, 'customer', dto.returnUrl);
   }
 
   @ApiOperation({ summary: 'Cambiar plan (default: schedule al fin del período).' })
