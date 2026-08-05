@@ -609,14 +609,36 @@ export class PaymentsService {
     method: PaymentMethodKind,
     md: Record<string, unknown>,
   ): Record<string, unknown> {
-    if (method !== 'card') return md;
-    const digits = String(md.cardNumber ?? '').replace(/\D/g, '');
-    return {
-      cardType: md.cardType,
-      customerId: md.customerId,
-      accountType: md.accountType,
-      cardLast4: digits.length >= 4 ? digits.slice(-4) : undefined,
+    // Tarjetas: NUNCA persistir PAN/CVV/vencimiento. Para el segundo paso (finalize con OTP) el
+    // navegador reenvía la tarjeta; en la fila sólo guardamos identificadores no sensibles + last4.
+    const last4 = (v: unknown) => {
+      const digits = String(v ?? '').replace(/\D/g, '');
+      return digits.length >= 4 ? digits.slice(-4) : undefined;
     };
+
+    if (method === 'card') {
+      // Botón Mercantil.
+      return {
+        cardType: md.cardType,
+        customerId: md.customerId,
+        accountType: md.accountType,
+        cardLast4: last4(md.cardNumber),
+      };
+    }
+
+    if (method === 'card_ccr') {
+      // Credicard (CCR). tipoDocumento/documentoCliente/cardHolderName/accountType no son
+      // sensibles; PAN, cvc, monthExp y yearExp se descartan (los reenvía el navegador).
+      return {
+        tipoDocumento: md.tipoDocumento,
+        documentoCliente: md.documentoCliente,
+        cardHolderName: md.cardHolderName,
+        accountType: md.accountType,
+        cardLast4: last4(md.cardNumber),
+      };
+    }
+
+    return md;
   }
 
   private toDomain(entity: PaymentEntity): Payment {
