@@ -11,6 +11,7 @@ export class MerchantTerminalMapper {
     d.sitefIdBranch = raw.sitefIdBranch;
     d.sitefCodeStall = raw.sitefCodeStall;
     d.acquirerBank = raw.acquirerBank;
+    d.methodKinds = raw.methodKinds;
     d.isActive = raw.isActive;
     d.notes = raw.notes;
     d.createdAt = raw.createdAt;

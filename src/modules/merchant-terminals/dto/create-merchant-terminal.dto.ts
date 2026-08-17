@@ -1,5 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Min, IsInt, IsUUID, IsString, MaxLength, IsOptional } from 'class-validator';
+import { Min, IsIn, IsInt, IsUUID, IsArray, IsString, MaxLength, IsOptional } from 'class-validator';
+
+/** Métodos ruteable por terminal. Zelle no aplica (nunca llega al gateway Sitef). */
+export const TERMINAL_METHOD_KINDS = ['c2p', 'pago_movil', 'transfer', 'card', 'card_ccr', 'web_button'] as const;
+export type TerminalMethodKind = (typeof TERMINAL_METHOD_KINDS)[number];
 
 export class CreateMerchantTerminalDto {
   @ApiProperty()
@@ -34,6 +38,17 @@ export class CreateMerchantTerminalDto {
   @IsInt()
   @Min(0)
   acquirerBank: number;
+
+  @ApiPropertyOptional({
+    isArray: true,
+    enum: TERMINAL_METHOD_KINDS,
+    description:
+      'Métodos que atiende este terminal. Omitir/vacío = terminal por defecto (todo método sin terminal específico).',
+  })
+  @IsArray()
+  @IsIn(TERMINAL_METHOD_KINDS, { each: true })
+  @IsOptional()
+  methodKinds?: TerminalMethodKind[];
 
   @ApiPropertyOptional()
   @IsString()

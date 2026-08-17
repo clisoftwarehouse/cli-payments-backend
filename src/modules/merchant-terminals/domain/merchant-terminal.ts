@@ -22,6 +22,16 @@ export class MerchantTerminal {
   @ApiProperty({ description: 'Banco adquiriente (issuingbank/receivingbank en Sitef). Ej: 105 Mercantil.' })
   acquirerBank: number;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    isArray: true,
+    type: String,
+    description:
+      'Métodos que atiende este terminal (c2p, pago_movil, transfer, card, card_ccr, web_button). ' +
+      'Vacío/null = terminal por defecto: atiende todo método sin terminal específico.',
+  })
+  methodKinds: string[] | null;
+
   @ApiProperty()
   isActive: boolean;
 

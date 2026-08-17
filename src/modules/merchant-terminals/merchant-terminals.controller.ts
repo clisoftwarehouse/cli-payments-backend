@@ -16,6 +16,7 @@ import {
 import { MerchantTerminal } from './domain/merchant-terminal';
 import { MerchantTerminalsService } from './merchant-terminals.service';
 import { CreateMerchantTerminalDto } from './dto/create-merchant-terminal.dto';
+import { UpdateMerchantTerminalDto } from './dto/update-merchant-terminal.dto';
 
 @ApiTags('Merchant Terminals (admin)')
 @ApiBearerAuth()
@@ -38,6 +39,18 @@ export class MerchantTerminalsController {
   @Get()
   list(@Query('applicationId', ParseUUIDPipe) applicationId: string): Promise<MerchantTerminal[]> {
     return this.service.list(applicationId);
+  }
+
+  @ApiOperation({
+    summary: 'Editar un terminal (credenciales, banco adquiriente, métodos asignados).',
+    description:
+      'Omite sitefPassword para conservar el actual. methodKinds: [] lo vuelve terminal por defecto; ' +
+      'los conflictos de ruteo (método reclamado dos veces, dos defaults) responden 409.',
+  })
+  @ApiOkResponse({ type: MerchantTerminal })
+  @Patch(':id')
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMerchantTerminalDto): Promise<MerchantTerminal> {
+    return this.service.update(id, dto);
   }
 
   @ApiOkResponse({ type: MerchantTerminal })

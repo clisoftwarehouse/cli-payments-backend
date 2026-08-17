@@ -34,7 +34,7 @@ export class SitefAdapter extends PaymentGatewayPort {
   }
 
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
-    const creds = await this.resolveCreds(input.applicationId);
+    const creds = await this.resolveCreds(input.applicationId, input.method);
     const amount = this.parseAmount(input.amount);
 
     switch (input.method) {
@@ -56,7 +56,7 @@ export class SitefAdapter extends PaymentGatewayPort {
   }
 
   async submitOtp(input: SubmitOtpInput): Promise<CreatePaymentResult> {
-    const creds = await this.resolveCreds(input.applicationId);
+    const creds = await this.resolveCreds(input.applicationId, input.method);
     const amount = this.parseAmount(input.amount);
     if (input.method === 'card_ccr') {
       return this.cardCcrFinalize(creds, amount, input.otp, input.methodData);
@@ -68,7 +68,7 @@ export class SitefAdapter extends PaymentGatewayPort {
   }
 
   async getStatus(input: GetStatusInput): Promise<GatewayStatusResult> {
-    const creds = await this.resolveCreds(input.applicationId);
+    const creds = await this.resolveCreds(input.applicationId, input.method);
     const amount = this.parseAmount(input.amount);
 
     switch (input.method) {
@@ -921,8 +921,9 @@ export class SitefAdapter extends PaymentGatewayPort {
 
   // -- Helpers --------------------------------------------------------------
 
-  private async resolveCreds(applicationId: string): Promise<SitefCredentials> {
-    const terminal = await this.terminals.resolveForApplication(applicationId);
+  /** El método define el terminal: puede haber credenciales/adquirientes distintos por método. */
+  private async resolveCreds(applicationId: string, method: string): Promise<SitefCredentials> {
+    const terminal = await this.terminals.resolveForApplication(applicationId, method);
     return {
       username: terminal.sitefUsername,
       password: terminal.sitefPassword,

@@ -6,7 +6,11 @@ import { NullableType } from '@/common/utils/types/nullable.type';
 import { MerchantTerminal } from '../../../../domain/merchant-terminal';
 import { MerchantTerminalMapper } from '../mappers/merchant-terminal.mapper';
 import { MerchantTerminalEntity } from '../entities/merchant-terminal.entity';
-import { MerchantTerminalRepository, MerchantTerminalCreateInput } from '../../merchant-terminal.repository';
+import {
+  MerchantTerminalRepository,
+  MerchantTerminalCreateInput,
+  MerchantTerminalUpdateInput,
+} from '../../merchant-terminal.repository';
 
 @Injectable()
 export class MerchantTerminalsRelationalRepository implements MerchantTerminalRepository {
@@ -18,6 +22,14 @@ export class MerchantTerminalsRelationalRepository implements MerchantTerminalRe
   async create(data: MerchantTerminalCreateInput): Promise<MerchantTerminal> {
     const created = await this.repo.save(this.repo.create(data));
     return MerchantTerminalMapper.toDomain(created);
+  }
+
+  async update(id: string, data: MerchantTerminalUpdateInput): Promise<MerchantTerminal> {
+    const entity = await this.repo.findOne({ where: { id } });
+    if (!entity) throw new NotFoundException('Merchant terminal not found');
+    Object.assign(entity, data);
+    const saved = await this.repo.save(entity);
+    return MerchantTerminalMapper.toDomain(saved);
   }
 
   async findById(id: string): Promise<NullableType<MerchantTerminal>> {

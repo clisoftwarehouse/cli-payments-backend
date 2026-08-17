@@ -9,11 +9,24 @@ export type MerchantTerminalCreateInput = {
   sitefIdBranch: number;
   sitefCodeStall: string;
   acquirerBank: number;
+  methodKinds?: string[] | null;
   notes?: string | null;
 };
 
+export type MerchantTerminalUpdateInput = Partial<{
+  label: string;
+  sitefUsername: string;
+  sitefPasswordEncrypted: string;
+  sitefIdBranch: number;
+  sitefCodeStall: string;
+  acquirerBank: number;
+  methodKinds: string[] | null;
+  notes: string | null;
+}>;
+
 export abstract class MerchantTerminalRepository {
   abstract create(data: MerchantTerminalCreateInput): Promise<MerchantTerminal>;
+  abstract update(id: string, data: MerchantTerminalUpdateInput): Promise<MerchantTerminal>;
   abstract findById(id: string): Promise<NullableType<MerchantTerminal>>;
   abstract findEncryptedPasswordById(id: string): Promise<NullableType<string>>;
   abstract findActiveByApplication(applicationId: string): Promise<MerchantTerminal[]>;

@@ -43,6 +43,15 @@ export class MerchantTerminalEntity extends EntityRelationalHelper {
   @Column({ type: 'integer', name: 'acquirer_bank' })
   acquirerBank: number;
 
+  /**
+   * Métodos de pago que atiende este terminal (ej. ['c2p'] para el terminal Banesco de débito
+   * inmediato). NULL o vacío = terminal POR DEFECTO: atiende todo método sin terminal específico.
+   * Motivación real: el contrato de Sitef cambia según el banco adquiriente del terminal, y hay
+   * métodos que conviene rutear por un adquiriente distinto.
+   */
+  @Column({ type: 'text', array: true, nullable: true, name: 'method_kinds' })
+  methodKinds: string[] | null;
+
   @Column({ type: 'boolean', default: true, name: 'is_active' })
   isActive: boolean;
 
