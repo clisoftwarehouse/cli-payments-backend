@@ -144,10 +144,11 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       const body = lastBody();
       expect(body.destinationid).toBe('V30749551');
       expect(body.destinationmobilenumber).toBe('584146380056');
-      // El banco que teclea el cliente (0102) es el EMISOR → issuingbank.
-      expect(body.issuingbank).toBe(102);
-      // destinationbank = banco receptor del comercio (acquirerBank del terminal, 134 en el mock).
-      expect(body.destinationbank).toBe(134);
+      // issuingbank = banco adquiriente del terminal (doc: "Banco Emisor (banco adquiriente)");
+      // destinationbank = banco del cliente. Con el mapeo invertido, todo banco ≠ adquiriente
+      // rebotaba con "Banco emisor no autorizado para débito inmediato" (prod 2026-08-17).
+      expect(body.issuingbank).toBe(134);
+      expect(body.destinationbank).toBe(102);
     });
   });
 

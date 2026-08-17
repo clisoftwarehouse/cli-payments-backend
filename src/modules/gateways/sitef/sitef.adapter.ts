@@ -95,12 +95,13 @@ export class SitefAdapter extends PaymentGatewayPort {
     const { request, response } = await this.client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
       destinationid: this.toIdentityDocument(md.destinationId),
       destinationmobilenumber: this.toInternationalPhone(md.destinationMobileNumber),
-      // issuingbank = banco EMISOR: el banco del cliente que teclea en el formulario, el que
-      // emite/autoriza el débito y le manda la OTP. destinationbank = banco RECEPTOR del
-      // comercio (adquiriente, Mercantil 105). Antes iban al revés y Sitef rechazaba con
-      // "Banco emisor no autorizado" cuando el cliente no era del banco adquiriente.
-      destinationbank: creds.acquirerBank,
-      issuingbank: this.toBankCode(md.destinationBank),
+      // Según la doc: issuingbank = "Banco Emisor (banco adquiriente)" del comercio, y
+      // destinationbank = banco del cliente (el destino de la solicitud, como destinationid y
+      // destinationmobilenumber). Confirmado empíricamente en el terminal Mercantil (2026-08-17):
+      // con issuingbank = banco del cliente, todo banco ≠ adquiriente rebota con "Banco emisor
+      // no autorizado para débito inmediato".
+      issuingbank: creds.acquirerBank,
+      destinationbank: this.toBankCode(md.destinationBank),
       invoicenumber: invoiceNumber,
       amount,
     });
@@ -134,12 +135,13 @@ export class SitefAdapter extends PaymentGatewayPort {
     const { request, response } = await this.client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
       destinationid: this.toIdentityDocument(md.destinationId),
       destinationmobilenumber: this.toInternationalPhone(md.destinationMobileNumber),
-      // issuingbank = banco EMISOR: el banco del cliente que teclea en el formulario, el que
-      // emite/autoriza el débito y le manda la OTP. destinationbank = banco RECEPTOR del
-      // comercio (adquiriente, Mercantil 105). Antes iban al revés y Sitef rechazaba con
-      // "Banco emisor no autorizado" cuando el cliente no era del banco adquiriente.
-      destinationbank: creds.acquirerBank,
-      issuingbank: this.toBankCode(md.destinationBank),
+      // Según la doc: issuingbank = "Banco Emisor (banco adquiriente)" del comercio, y
+      // destinationbank = banco del cliente (el destino de la solicitud, como destinationid y
+      // destinationmobilenumber). Confirmado empíricamente en el terminal Mercantil (2026-08-17):
+      // con issuingbank = banco del cliente, todo banco ≠ adquiriente rebota con "Banco emisor
+      // no autorizado para débito inmediato".
+      issuingbank: creds.acquirerBank,
+      destinationbank: this.toBankCode(md.destinationBank),
       invoicenumber: invoiceNumber,
       amount,
       otp,
