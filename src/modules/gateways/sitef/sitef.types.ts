@@ -73,6 +73,28 @@ export type SitefTransactionKeyInfoResponse = {
 };
 
 /**
+ * Paso 2 del dialecto Mercantil (también NO documentado): confirmación del débito ejecutado.
+ * No trae trx_status — la presencia del bloque con su referencia ES la confirmación
+ * (`trxType: "pago"`, `paymentMethod: "dbi"`). Los rechazos llegan por `error_list`/`messages`.
+ * `immediateDebitReference` es la referencia del movimiento bancario (su last-8 coincide con
+ * la convención de referencias del resto de la plataforma).
+ */
+export type SitefImmediateDebitResponse = {
+  amount?: number;
+  trxType?: string; // "pago"
+  currency?: string;
+  invoiceNumber?: {
+    number?: string;
+    invoiceCreationDate?: string;
+    invoiceCancelledDate?: string;
+  };
+  paymentMethod?: string; // "dbi"
+  referenceNumber?: number | string;
+  immediateDebitRefLast8?: string;
+  immediateDebitReference?: number | string;
+};
+
+/**
  * Aviso a nivel raíz de la respuesta (hermano de `data`, NO dentro de él).
  * Sitef lo usa para rechazos que igual devuelven `transaction_list`, el caso crítico
  * siendo `field: "Transaccion duplicada"` — la referencia ya se consumió en otra factura.
@@ -91,6 +113,7 @@ export type SitefOperationResponse = {
     merchant_identify: SitefMerchantIdentify;
     transaction_c2p_response?: SitefTransactionC2pResponse;
     transactionKeyInfoResponse?: SitefTransactionKeyInfoResponse;
+    immediateDebitResponse?: SitefImmediateDebitResponse;
     transaction_response?: SitefTransactionResponse;
     authentication_info?: SitefAuthenticationInfo;
     transaction_list?: Array<{

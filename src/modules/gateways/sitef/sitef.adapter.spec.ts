@@ -574,6 +574,63 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.failureCode).toBe('MERCANTIL_C2P_NO_CONFIRMATION');
     });
 
+    it('should mapear immediateDebitResponse (paso 2) a succeeded con la referencia del movimiento', async () => {
+      // Payload real de produccion: el debito se ejecuto pero la plataforma lo marcaba
+      // NO_RESPONSE porque este shape camelCase tampoco esta documentado.
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          code: 200,
+          status: 'OK',
+          data: {
+            processingDate: '2026-08-17 09:14:45 VET',
+            merchantIdentify: { merchantId: 6232002, terminalId: '1', integratorId: 1 },
+            immediateDebitResponse: {
+              amount: 6.71,
+              trxType: 'pago',
+              currency: 'VES',
+              invoiceNumber: { number: 'FAC-1786972485471' },
+              paymentMethod: 'dbi',
+              referenceNumber: 928196920866,
+              immediateDebitRefLast8: '65197741',
+              immediateDebitReference: '85265197741',
+            },
+          },
+        },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        otp: '21401859',
+        methodData: { ...c2pInput.methodData, mercantilAuthToken: 'tok', mercantilReferenceNumber: '928196920866' },
+      });
+
+      expect(r.status).toBe('succeeded');
+      expect(r.gatewayReference).toBe('85265197741');
+    });
+
+    it('should fallar (fail-closed) si immediateDebitResponse viene sin ninguna referencia', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: { data: { immediateDebitResponse: { trxType: 'pago' } } },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        otp: '21401859',
+        methodData: { ...c2pInput.methodData, mercantilAuthToken: 'tok' },
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureCode).toBe('MERCANTIL_DEBIT_NO_REFERENCE');
+    });
+
     it('should fallar con el trxStatus de Sitef si la solicitud de clave no fue exitosa', async () => {
       postMock.mockResolvedValue({
         request: {},

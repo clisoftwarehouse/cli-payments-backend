@@ -177,6 +177,35 @@ export class SitefAdapter extends PaymentGatewayPort {
       return this.mapMercantilKeyInfo(keyInfo, stage, request, response);
     }
 
+    // Paso 2 del dialecto Mercantil: `immediateDebitResponse` ES la confirmación del débito
+    // (no trae trx_status; los rechazos llegan por error_list/messages, ya cortados arriba).
+    const debit = response.data?.immediateDebitResponse;
+    if (debit) {
+      const reference = debit.immediateDebitReference ?? debit.referenceNumber;
+      if (reference != null) {
+        return {
+          status: 'succeeded',
+          gatewayReference: reference.toString(),
+          rawRequest: request,
+          rawResponse: response as unknown as Record<string, unknown>,
+        };
+      }
+      // Bloque de débito sin ninguna referencia: ambiguo → fail-closed con detalle. El dinero
+      // puede haberse movido — el admin puede otorgar manualmente tras verificar con el banco.
+      this.logger.error(
+        `Débito inmediato Mercantil: immediateDebitResponse sin referencia. Body: ${JSON.stringify(response).slice(0, 1000)}`,
+      );
+      return {
+        status: 'failed',
+        gatewayReference: null,
+        failureCode: 'MERCANTIL_DEBIT_NO_REFERENCE',
+        failureMessage:
+          'El banco respondió el débito sin número de referencia. Verifica en tu banco si el cobro se realizó antes de reintentar.',
+        rawRequest: request,
+        rawResponse: response as unknown as Record<string, unknown>,
+      };
+    }
+
     if (!trx) {
       // Sitef respondió 200 pero sin el shape esperado — extraer cualquier info útil del body.
       const r = response as { code?: unknown; status?: unknown; message?: unknown; data?: unknown; error?: unknown };
