@@ -296,6 +296,80 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.failureMessage).toBe('Numero de tarjeta incorrecto');
     });
 
+    it('should aplanar el INVALID_DATA de Credicard a un mensaje legible (caso real: pin)', async () => {
+      // Shape real de produccion: finalizarCCRSitef con pin vacio en tarjeta de debito.
+      postCamelMock.mockResolvedValue({
+        request: {},
+        response: {
+          code: 400,
+          status: 'Datos invalidos',
+          data: {
+            code: 'INVALID_DATA',
+            status: 400,
+            message: 'Datos invalidos',
+            data: { pin: 'Debe tener al menos 4 caracteres' },
+          },
+        },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'card_ccr',
+        invoiceNumber: 'CLI-2026-000063',
+        amount: '6.71',
+        otp: '70.61',
+        methodData: {
+          cardNumber: '5899415537332199',
+          tipoDocumento: 'V',
+          documentoCliente: '30749551',
+          cvc: '123',
+          monthExp: '07',
+          yearExp: '2032',
+          cardHolderName: 'Emmanuel Canate',
+          accountType: '20',
+          gatewayReference: 'b376db68-a6e4-43aa-a250-b6397b4e0d1d',
+        },
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureMessage).toBe('Datos invalidos — pin: Debe tener al menos 4 caracteres');
+    });
+
+    it('should reenviar el pin en el finalize CCR cuando el cliente lo proporciona', async () => {
+      postCamelMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { data: { status: 'paid', referenceId: 9634, receipt: { result: { message: 'APROBADO' } } } },
+        },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'card_ccr',
+        invoiceNumber: 'CLI-2026-000063',
+        amount: '6.71',
+        otp: '70.61',
+        methodData: {
+          cardNumber: '5899415537332199',
+          tipoDocumento: 'V',
+          documentoCliente: '30749551',
+          cvc: '123',
+          monthExp: '07',
+          yearExp: '2032',
+          cardHolderName: 'Emmanuel Canate',
+          accountType: '20',
+          pin: '1234',
+          gatewayReference: 'b376db68',
+        },
+      });
+
+      const body = lastCamelBody();
+      expect(body.pin).toBe('1234');
+      expect(body.otp).toBe('70.61');
+      expect(body.accountType).toBe('20');
+      expect(r.status).toBe('succeeded');
+    });
+
     it('should rechazar número de tarjeta y CVV inválidos', async () => {
       await expect(
         adapter.createPayment({

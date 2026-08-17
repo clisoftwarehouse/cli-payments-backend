@@ -484,10 +484,31 @@ export class SitefAdapter extends PaymentGatewayPort {
       status: 'failed',
       gatewayReference: orderId as string,
       failureCode: 'CCR_REJECTED',
-      failureMessage: ccrResp.data?.data?.receipt?.result?.message ?? `Sitef CCR no aprobó el pago. status=${ccrResp.status}`,
+      failureMessage:
+        ccrResp.data?.data?.receipt?.result?.message ??
+        this.ccrInvalidDataMessage(ccrResp) ??
+        `Sitef CCR no aprobó el pago. status=${ccrResp.status}`,
       rawRequest: request,
       rawResponse,
     };
+  }
+
+  /**
+   * Errores de validación de Credicard: { data: { code: "INVALID_DATA", message: "Datos
+   * invalidos", data: { pin: "Debe tener al menos 4 caracteres" } } }. Se aplanan a un mensaje
+   * legible ("Datos inválidos — pin: Debe tener al menos 4 caracteres") en vez del genérico.
+   */
+  private ccrInvalidDataMessage(ccrResp: SitefCcrFinalizeResponse): string | null {
+    const err = ccrResp.data as unknown as { message?: unknown; data?: unknown } | undefined;
+    if (typeof err?.message !== 'string') return null;
+    const fields =
+      err.data && typeof err.data === 'object'
+        ? Object.entries(err.data as Record<string, unknown>)
+            .filter(([, v]) => typeof v === 'string')
+            .map(([k, v]) => `${k}: ${v as string}`)
+            .join('; ')
+        : '';
+    return fields.length > 0 ? `${err.message} — ${fields}` : err.message;
   }
 
   // -- Card (Botón Mercantil) -----------------------------------------------

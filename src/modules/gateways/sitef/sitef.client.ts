@@ -103,7 +103,12 @@ export class SitefClient {
   /** ¿El body trae un motivo de Sitef que podamos mostrarle al cliente? */
   private hasSitefReason(data: SitefOperationResponse | undefined): boolean {
     if (!data || typeof data !== 'object') return false;
-    return (data.messages?.length ?? 0) > 0 || (data.data?.error_list?.length ?? 0) > 0;
+    // Tercer formato de error (CCR/Credicard): { data: { code: "INVALID_DATA", message, data: {campo: motivo} } }.
+    // Ej. real: pin "Debe tener al menos 4 caracteres". También es un motivo mostrable.
+    const nestedMessage = (data.data as { message?: unknown } | undefined)?.message;
+    return (
+      (data.messages?.length ?? 0) > 0 || (data.data?.error_list?.length ?? 0) > 0 || typeof nestedMessage === 'string'
+    );
   }
 
   private maskRequest(body: Record<string, unknown>): Record<string, unknown> {
@@ -124,8 +129,12 @@ export class SitefClient {
       const digits = String(masked.cardNumber).replace(/\D/g, '');
       masked.cardNumber = digits.length >= 4 ? `••••${digits.slice(-4)}` : '••••';
     }
-    for (const key of ['cvv', 'cvc', 'twofactor_auth', 'expirationDate']) {
-      if (masked[key] != null) masked[key] = '•••';
+    // `pin` (clave de la tarjeta, débito CCR) es tan sensible como el CVV. Solo se enmascara si
+    // trae valor: un pin vacío debe verse vacío en raw_request para poder diagnosticar (fue
+    // exactamente el bug del INVALID_DATA "pin: Debe tener al menos 4 caracteres").
+    for (const key of ['cvv', 'cvc', 'twofactor_auth', 'expirationDate', 'pin']) {
+      if (typeof masked[key] === 'string' && (masked[key] as string).length > 0) masked[key] = '•••';
+      else if (masked[key] != null && typeof masked[key] !== 'string') masked[key] = '•••';
     }
     return masked;
   }
