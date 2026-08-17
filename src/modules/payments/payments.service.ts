@@ -415,8 +415,10 @@ export class PaymentsService {
   }
 
   /** Referencia emitida por el gateway: se usa tal cual (no es input del cliente). */
-  private gatewayReferenceKey(value: string | null | undefined): string | null {
-    const trimmed = (value ?? '').trim();
+  private gatewayReferenceKey(value: string | number | null | undefined): string | null {
+    // Defensivo con String(): Sitef mezcla tipos entre motores (referenceId de CCR llega como
+    // NUMBER). Un .trim() sobre un number aquí convirtió en 500 un pago YA COBRADO por el banco.
+    const trimmed = String(value ?? '').trim();
     return trimmed.length > 0 ? trimmed.slice(0, 32) : null;
   }
 

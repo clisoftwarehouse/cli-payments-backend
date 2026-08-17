@@ -157,7 +157,8 @@ export type SitefCcrFinalizeResponse = {
         };
       };
       status?: string; // "paid"
-      referenceId?: string;
+      // Llega como NUMBER en producción (ej. 765800) aunque el resto de referencias son string.
+      referenceId?: number | string;
     };
   };
 };

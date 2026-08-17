@@ -469,7 +469,9 @@ export class SitefAdapter extends PaymentGatewayPort {
     const rawResponse = response as unknown as Record<string, unknown>;
     const resultMsg = (ccrResp.data?.data?.receipt?.result?.message ?? '').toUpperCase();
     const paidStatus = ccrResp.data?.data?.status;
-    const referenceId = ccrResp.data?.data?.referenceId ?? (orderId as string);
+    // referenceId llega como NUMBER (765800). Forzar string: gatewayReference es varchar y
+    // aguas abajo se le hace .trim() — un number aquí tumbó con 500 un pago YA COBRADO.
+    const referenceId = String(ccrResp.data?.data?.referenceId ?? orderId);
 
     if (resultMsg === 'APROBADO' || paidStatus === 'paid') {
       return {

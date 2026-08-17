@@ -370,6 +370,53 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.status).toBe('succeeded');
     });
 
+    it('should convertir a string el referenceId numerico del finalize CCR (payload real)', async () => {
+      // Credicard devuelve referenceId como NUMBER (765800); pasarlo crudo a gatewayReference
+      // (varchar + .trim() aguas abajo) tumbo con 500 un pago YA COBRADO por el banco.
+      postCamelMock.mockResolvedValue({
+        request: {},
+        response: {
+          code: 200,
+          status: 'Procesado',
+          data: {
+            code: 'PAYMENT_SUCCESSFULL',
+            message: 'Orden pagada con éxito',
+            data: {
+              id: '9b1c6a62-5196-4213-b3a9-b35996e27978',
+              status: 'paid',
+              referenceId: 765800,
+              traceId: 766528,
+              receipt: { result: { message: 'APROBADO', ref: '765800', response_code: '00' } },
+            },
+          },
+        },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'card_ccr',
+        invoiceNumber: 'CLI-2026-000063',
+        amount: '6.71',
+        otp: '70.61',
+        methodData: {
+          cardNumber: '5434640000002199',
+          tipoDocumento: 'V',
+          documentoCliente: '30749551',
+          cvc: '123',
+          monthExp: '07',
+          yearExp: '2032',
+          cardHolderName: 'Emmanuel Canate',
+          accountType: '20',
+          pin: '1234',
+          gatewayReference: '9b1c6a62-5196-4213-b3a9-b35996e27978',
+        },
+      });
+
+      expect(r.status).toBe('succeeded');
+      expect(r.gatewayReference).toBe('765800');
+      expect(typeof r.gatewayReference).toBe('string');
+    });
+
     it('should rechazar número de tarjeta y CVV inválidos', async () => {
       await expect(
         adapter.createPayment({
