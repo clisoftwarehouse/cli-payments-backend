@@ -104,10 +104,10 @@ describe('SitefClient — respuestas de error de Sitef', () => {
 
     const { request } = await client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
       otp: '12345678',
-      authenticationtoken: 'WHNOpdWrZv3T6HYCR/qvn-blob-cifrado-de-3kb-que-no-debe-quedar-en-logs',
+      authenticationToken: 'WHNOpdWrZv3T6HYCR/qvn-blob-cifrado-de-3kb-que-no-debe-quedar-en-logs',
     });
 
-    expect(request.authenticationtoken).toBe('WHNOpdWrZv3T…');
+    expect(request.authenticationToken).toBe('WHNOpdWrZv3T…');
     expect(request.otp).toBe('12345678');
   });
 });

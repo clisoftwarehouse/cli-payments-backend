@@ -113,8 +113,10 @@ export class SitefClient {
     }
     // Token de sesión del C2P Mercantil: es un blob de ~3KB y funciona como bearer del débito
     // en curso — truncarlo en raw_request/logs (el valor completo solo viaja a Sitef).
-    if (typeof masked.authenticationtoken === 'string') {
-      masked.authenticationtoken = `${(masked.authenticationtoken as string).slice(0, 12)}…`;
+    for (const key of ['authenticationToken', 'authenticationtoken']) {
+      if (typeof masked[key] === 'string') {
+        masked[key] = `${(masked[key] as string).slice(0, 12)}…`;
+      }
     }
     // Nunca guardar en crudo datos sensibles de tarjeta (raw_request de payment_attempts,
     // logs). Del PAN solo se conservan los últimos 4; CVV / 2FO / vencimiento se ocultan.

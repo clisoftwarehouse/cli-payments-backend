@@ -119,13 +119,15 @@ export class SitefAdapter extends PaymentGatewayPort {
     this.requireFields(md, ['destinationId', 'destinationMobileNumber', 'destinationBank']);
 
     // Variante Mercantil: el paso 1 devolvió un authenticationToken de sesión (guardado en
-    // method_data vía methodDataPatch). Se reenvía junto con la OTP — nombres en minúscula
-    // siguiendo la convención de requests de Sitef. Terminales Banesco no traen estos campos.
+    // method_data vía methodDataPatch). Se reenvía junto con la OTP — en camelCase: a diferencia
+    // del resto de la API (todo minúsculas), el motor Mercantil exige ese casing; con
+    // "authenticationtoken" responde 4000 "Falta el campo 'authenticationToken'".
+    // Terminales Banesco no traen estos campos y su payload no cambia.
     const mercantilSession: Record<string, unknown> = {};
     if (typeof md.mercantilAuthToken === 'string' && md.mercantilAuthToken.length > 0) {
-      mercantilSession.authenticationtoken = md.mercantilAuthToken;
+      mercantilSession.authenticationToken = md.mercantilAuthToken;
       if (md.mercantilReferenceNumber != null) {
-        mercantilSession.referencenumber = md.mercantilReferenceNumber;
+        mercantilSession.referenceNumber = md.mercantilReferenceNumber;
       }
     }
 

@@ -506,7 +506,7 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       });
     });
 
-    it('should reenviar authenticationtoken y referencenumber junto con la OTP', async () => {
+    it('should reenviar authenticationToken y referenceNumber (camelCase) junto con la OTP', async () => {
       postMock.mockResolvedValue({
         request: {},
         response: {
@@ -529,8 +529,10 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
 
       const body = lastBody();
       expect(body.otp).toBe('12345678');
-      expect(body.authenticationtoken).toBe('WHNOpdWrZv3T6HYCR/blob-cifrado');
-      expect(body.referencenumber).toBe('63314648126');
+      // camelCase obligatorio: con "authenticationtoken" Sitef responde 4000
+      // "Falta el campo 'authenticationToken'" (visto en produccion).
+      expect(body.authenticationToken).toBe('WHNOpdWrZv3T6HYCR/blob-cifrado');
+      expect(body.referenceNumber).toBe('63314648126');
       expect(r.status).toBe('succeeded');
     });
 
@@ -552,8 +554,8 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       });
 
       const body = lastBody();
-      expect(body.authenticationtoken).toBeUndefined();
-      expect(body.referencenumber).toBeUndefined();
+      expect(body.authenticationToken).toBeUndefined();
+      expect(body.referenceNumber).toBeUndefined();
     });
 
     it('should fallar (no requires_otp) si la ejecución con OTP devuelve otra solicitud de clave', async () => {
