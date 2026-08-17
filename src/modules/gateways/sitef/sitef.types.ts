@@ -51,6 +51,28 @@ export type SitefAuthenticationInfo = {
 };
 
 /**
+ * Variante Mercantil del débito inmediato — NO DOCUMENTADA en API_SITEF_documentacion.md.
+ *
+ * Observada en producción (agosto 2026) al llamar `setDebitInmediatoSitef` con un terminal
+ * cuyo adquiriente es Mercantil (idbranch 980): en vez del `transaction_c2p_response`
+ * documentado, Sitef enruta por el motor C2P de Mercantil y responde camelCase con una
+ * "solicitud de clave": `trxStatus: "Solicitud realizada exitosamente"`, un `invoiceNumber`
+ * propio generado por Sitef (FAC-...), un `referenceNumber` y un `authenticationToken`
+ * (blob cifrado de sesión) que presumiblemente debe reenviarse al ejecutar el débito.
+ * Los terminales adquiridos por Banesco (idbranch 117) siguen el contrato documentado.
+ */
+export type SitefTransactionKeyInfoResponse = {
+  trxStatus?: string;
+  invoiceNumber?: {
+    number?: string;
+    invoiceCreationDate?: string;
+    invoiceCancelledDate?: string;
+  };
+  referenceNumber?: number | string;
+  authenticationToken?: string;
+};
+
+/**
  * Aviso a nivel raíz de la respuesta (hermano de `data`, NO dentro de él).
  * Sitef lo usa para rechazos que igual devuelven `transaction_list`, el caso crítico
  * siendo `field: "Transaccion duplicada"` — la referencia ya se consumió en otra factura.
@@ -68,6 +90,7 @@ export type SitefOperationResponse = {
   data: {
     merchant_identify: SitefMerchantIdentify;
     transaction_c2p_response?: SitefTransactionC2pResponse;
+    transactionKeyInfoResponse?: SitefTransactionKeyInfoResponse;
     transaction_response?: SitefTransactionResponse;
     authentication_info?: SitefAuthenticationInfo;
     transaction_list?: Array<{

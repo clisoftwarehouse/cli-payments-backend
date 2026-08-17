@@ -346,10 +346,17 @@ export class PaymentsService {
       failureCode?: string;
       failureMessage?: string;
       redirectUrl?: string;
+      methodDataPatch?: Record<string, unknown>;
     },
   ): Promise<void> {
     const payment = await this.paymentsRepo.findOneOrFail({ where: { id: paymentId } });
     payment.gatewayReference = result.gatewayReference ?? payment.gatewayReference;
+
+    // Estado de sesión que el gateway necesita en el paso siguiente (ej. authenticationToken
+    // del débito inmediato vía Mercantil). submitOtp lo reinyecta desde method_data.
+    if (result.methodDataPatch) {
+      payment.methodData = { ...(payment.methodData ?? {}), ...result.methodDataPatch };
+    }
 
     switch (result.status) {
       case 'succeeded':

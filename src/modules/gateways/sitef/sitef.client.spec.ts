@@ -99,4 +99,15 @@ describe('SitefClient — respuestas de error de Sitef', () => {
     expect(request.cvv).toBe('•••');
     expect(request.expirationDate).toBe('•••');
   });
+  it('should truncar el authenticationtoken del C2P Mercantil en el request devuelto', async () => {
+    postMock.mockResolvedValue({ data: { data: {} } });
+
+    const { request } = await client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
+      otp: '12345678',
+      authenticationtoken: 'WHNOpdWrZv3T6HYCR/qvn-blob-cifrado-de-3kb-que-no-debe-quedar-en-logs',
+    });
+
+    expect(request.authenticationtoken).toBe('WHNOpdWrZv3T…');
+    expect(request.otp).toBe('12345678');
+  });
 });

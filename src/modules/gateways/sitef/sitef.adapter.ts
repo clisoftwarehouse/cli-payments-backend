@@ -6,6 +6,7 @@ import {
   SitefCredentials,
   SitefOperationResponse,
   SitefTransactionC2pResponse,
+  SitefTransactionKeyInfoResponse,
   SitefCcrCreateResponse,
   SitefCcrFinalizeResponse,
 } from './sitef.types';
@@ -105,7 +106,7 @@ export class SitefAdapter extends PaymentGatewayPort {
     });
 
     const trx = response.data?.transaction_c2p_response;
-    return this.mapC2pResult(trx, request, response);
+    return this.mapC2pResult(trx, request, response, 'request');
   }
 
   private async c2pExecuteWithOtp(
@@ -116,6 +117,17 @@ export class SitefAdapter extends PaymentGatewayPort {
     md: MethodData,
   ): Promise<CreatePaymentResult> {
     this.requireFields(md, ['destinationId', 'destinationMobileNumber', 'destinationBank']);
+
+    // Variante Mercantil: el paso 1 devolvió un authenticationToken de sesión (guardado en
+    // method_data vía methodDataPatch). Se reenvía junto con la OTP — nombres en minúscula
+    // siguiendo la convención de requests de Sitef. Terminales Banesco no traen estos campos.
+    const mercantilSession: Record<string, unknown> = {};
+    if (typeof md.mercantilAuthToken === 'string' && md.mercantilAuthToken.length > 0) {
+      mercantilSession.authenticationtoken = md.mercantilAuthToken;
+      if (md.mercantilReferenceNumber != null) {
+        mercantilSession.referencenumber = md.mercantilReferenceNumber;
+      }
+    }
 
     const { request, response } = await this.client.post('/s4/sitefAuth/setDebitInmediatoSitef', creds, {
       destinationid: this.toIdentityDocument(md.destinationId),
@@ -129,16 +141,18 @@ export class SitefAdapter extends PaymentGatewayPort {
       invoicenumber: invoiceNumber,
       amount,
       otp,
+      ...mercantilSession,
     });
 
     const trx = response.data?.transaction_c2p_response;
-    return this.mapC2pResult(trx, request, response);
+    return this.mapC2pResult(trx, request, response, 'execute');
   }
 
   private mapC2pResult(
     trx: SitefTransactionC2pResponse | undefined,
     request: Record<string, unknown>,
     response: SitefOperationResponse,
+    stage: 'request' | 'execute',
   ): CreatePaymentResult {
     // Un `messages[]` raíz (ej. "Transaccion duplicada") invalida la respuesta completa,
     // aunque venga con transaction_c2p_response en estado approved.
@@ -152,6 +166,13 @@ export class SitefAdapter extends PaymentGatewayPort {
         rawRequest: request,
         rawResponse: response as unknown as Record<string, unknown>,
       };
+    }
+
+    // Dialecto Mercantil del débito inmediato (ver SitefTransactionKeyInfoResponse):
+    // respuesta camelCase con authenticationToken en vez de transaction_c2p_response.
+    const keyInfo = response.data?.transactionKeyInfoResponse;
+    if (keyInfo) {
+      return this.mapMercantilKeyInfo(keyInfo, stage, request, response);
     }
 
     if (!trx) {
@@ -203,6 +224,71 @@ export class SitefAdapter extends PaymentGatewayPort {
       failureMessage: trx.trx_status,
       rawRequest: request,
       rawResponse: response,
+    };
+  }
+
+  /**
+   * Mapea la respuesta del motor C2P de Mercantil (dialecto NO documentado — ver
+   * SitefTransactionKeyInfoResponse). Contrato observado en producción:
+   *
+   * Paso 1 (solicitud): trxStatus "Solicitud realizada exitosamente" + authenticationToken +
+   * referenceNumber + un invoiceNumber propio de Sitef (FAC-...). La OTP viaja al cliente →
+   * `requires_otp`, y el token/referencia se guardan en method_data para reenviarse en el paso 2.
+   *
+   * Paso 2 (ejecución con OTP): el contrato de respuesta exitosa no está documentado. Si Sitef
+   * devuelve transaction_c2p_response approved, lo captura el mapeo normal. Si responde OTRA
+   * solicitud de clave, NO es una confirmación: fail-closed con el detalle para soporte —
+   * jamás acreditar un cobro sobre una respuesta ambigua.
+   */
+  private mapMercantilKeyInfo(
+    keyInfo: SitefTransactionKeyInfoResponse,
+    stage: 'request' | 'execute',
+    request: Record<string, unknown>,
+    response: SitefOperationResponse,
+  ): CreatePaymentResult {
+    const rawResponse = response as unknown as Record<string, unknown>;
+    const trxStatus = keyInfo.trxStatus ?? '';
+    const requested = trxStatus.toLowerCase().includes('exitos');
+
+    if (stage === 'request' && requested) {
+      return {
+        status: 'requires_otp',
+        gatewayReference: keyInfo.referenceNumber?.toString() ?? null,
+        methodDataPatch: {
+          mercantilAuthToken: keyInfo.authenticationToken,
+          mercantilReferenceNumber: keyInfo.referenceNumber?.toString(),
+          sitefInvoiceNumber: keyInfo.invoiceNumber?.number,
+        },
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
+    if (stage === 'execute') {
+      this.logger.error(
+        `Débito inmediato Mercantil: la ejecución con OTP devolvió transactionKeyInfoResponse ` +
+          `(trxStatus="${trxStatus}") en vez de una confirmación. Escalar a Sitef con ` +
+          `referenceNumber=${keyInfo.referenceNumber} y el invoice Sitef=${keyInfo.invoiceNumber?.number}.`,
+      );
+      return {
+        status: 'failed',
+        gatewayReference: keyInfo.referenceNumber?.toString() ?? null,
+        failureCode: 'MERCANTIL_C2P_NO_CONFIRMATION',
+        failureMessage:
+          'El banco no confirmó el débito (respondió una nueva solicitud de clave). ' +
+          'No se realizó ningún cobro — intenta de nuevo o contacta a soporte.',
+        rawRequest: request,
+        rawResponse,
+      };
+    }
+
+    return {
+      status: 'failed',
+      gatewayReference: keyInfo.referenceNumber?.toString() ?? null,
+      failureCode: 'MERCANTIL_C2P_REQUEST_FAILED',
+      failureMessage: trxStatus || 'El banco no pudo iniciar la solicitud de clave.',
+      rawRequest: request,
+      rawResponse,
     };
   }
 

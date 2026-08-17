@@ -457,4 +457,135 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.failureMessage).toBe('Tarjeta no afiliada al servicio');
     });
   });
+
+  /**
+   * Dialecto Mercantil del débito inmediato (NO documentado): con terminal adquirido por
+   * Mercantil, setDebitInmediatoSitef responde transactionKeyInfoResponse (camelCase) con un
+   * authenticationToken de sesión, en vez del transaction_c2p_response documentado. Regresión
+   * real: la app trataba esta respuesta como NO_RESPONSE y fallaba el pago con la OTP ya enviada.
+   */
+  describe('débito inmediato — dialecto Mercantil (transactionKeyInfoResponse)', () => {
+    const keyInfoResponse = {
+      code: 200,
+      status: 'OK',
+      data: {
+        processingDate: '2026-08-17 08:41:27 VET',
+        merchantIdentify: { merchantId: 6232002, terminalId: '1', integratorId: 1 },
+        transactionKeyInfoResponse: {
+          trxStatus: 'Solicitud realizada exitosamente',
+          invoiceNumber: { number: 'FAC-1786970487121', invoiceCreationDate: '2026-08-17' },
+          referenceNumber: 63314648126,
+          authenticationToken: 'WHNOpdWrZv3T6HYCR/blob-cifrado',
+        },
+      },
+    };
+
+    const c2pInput = {
+      applicationId: 'app1',
+      method: 'c2p' as const,
+      invoiceNumber: 'CLI-2026-000061',
+      amount: '6.71',
+      methodData: {
+        destinationId: 'V30749551',
+        destinationMobileNumber: '04146380056',
+        destinationBank: '0105',
+      },
+    };
+
+    it('should mapear la solicitud de clave a requires_otp guardando token y referencia', async () => {
+      postMock.mockResolvedValue({ request: {}, response: keyInfoResponse });
+
+      const r = await adapter.createPayment(c2pInput);
+
+      expect(r.status).toBe('requires_otp');
+      expect(r.gatewayReference).toBe('63314648126');
+      expect(r.methodDataPatch).toEqual({
+        mercantilAuthToken: 'WHNOpdWrZv3T6HYCR/blob-cifrado',
+        mercantilReferenceNumber: '63314648126',
+        sitefInvoiceNumber: 'FAC-1786970487121',
+      });
+    });
+
+    it('should reenviar authenticationtoken y referencenumber junto con la OTP', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { transaction_c2p_response: { trx_status: 'approved', payment_reference: 987 } },
+        },
+      });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        otp: '12345678',
+        methodData: {
+          ...c2pInput.methodData,
+          mercantilAuthToken: 'WHNOpdWrZv3T6HYCR/blob-cifrado',
+          mercantilReferenceNumber: '63314648126',
+        },
+      });
+
+      const body = lastBody();
+      expect(body.otp).toBe('12345678');
+      expect(body.authenticationtoken).toBe('WHNOpdWrZv3T6HYCR/blob-cifrado');
+      expect(body.referencenumber).toBe('63314648126');
+      expect(r.status).toBe('succeeded');
+    });
+
+    it('should NO incluir campos Mercantil cuando el terminal es Banesco (sin token en methodData)', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: { transaction_c2p_response: { trx_status: 'approved', payment_reference: 987 } },
+        },
+      });
+
+      await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000032',
+        amount: '6.62',
+        otp: '80098630',
+        methodData: c2pInput.methodData,
+      });
+
+      const body = lastBody();
+      expect(body.authenticationtoken).toBeUndefined();
+      expect(body.referencenumber).toBeUndefined();
+    });
+
+    it('should fallar (no requires_otp) si la ejecución con OTP devuelve otra solicitud de clave', async () => {
+      postMock.mockResolvedValue({ request: {}, response: keyInfoResponse });
+
+      const r = await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        otp: '12345678',
+        methodData: { ...c2pInput.methodData, mercantilAuthToken: 'tok', mercantilReferenceNumber: '1' },
+      });
+
+      expect(r.status).toBe('failed');
+      expect(r.failureCode).toBe('MERCANTIL_C2P_NO_CONFIRMATION');
+    });
+
+    it('should fallar con el trxStatus de Sitef si la solicitud de clave no fue exitosa', async () => {
+      postMock.mockResolvedValue({
+        request: {},
+        response: {
+          data: {
+            transactionKeyInfoResponse: { trxStatus: 'Cliente no afiliado al servicio', referenceNumber: 1 },
+          },
+        },
+      });
+
+      const r = await adapter.createPayment(c2pInput);
+
+      expect(r.status).toBe('failed');
+      expect(r.failureMessage).toBe('Cliente no afiliado al servicio');
+    });
+  });
 });

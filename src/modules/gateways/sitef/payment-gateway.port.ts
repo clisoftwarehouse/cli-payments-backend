@@ -16,6 +16,12 @@ export type CreatePaymentResult = {
   gatewayReference: string | null;
   /** URL a la que redirigir al cliente (para Web Button). */
   redirectUrl?: string;
+  /**
+   * Estado de sesión del gateway que el paso siguiente necesita (ej. `authenticationToken` de la
+   * variante Mercantil del débito inmediato). Se mergea en `payment.method_data` y `submitOtp`
+   * lo reinyecta al adapter. NUNCA datos de tarjeta.
+   */
+  methodDataPatch?: Record<string, unknown>;
   failureCode?: string;
   failureMessage?: string;
   rawRequest: Record<string, unknown>;
