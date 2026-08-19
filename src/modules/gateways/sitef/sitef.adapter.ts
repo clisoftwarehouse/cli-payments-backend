@@ -1,15 +1,8 @@
 import { Logger, Injectable, BadRequestException } from '@nestjs/common';
 
 import { SitefClient } from './sitef.client';
+import { extractSitefError } from './sitef-errors';
 import { Money, MoneyError } from '@/common/money/money';
-import {
-  SitefCredentials,
-  SitefOperationResponse,
-  SitefTransactionC2pResponse,
-  SitefTransactionKeyInfoResponse,
-  SitefCcrCreateResponse,
-  SitefCcrFinalizeResponse,
-} from './sitef.types';
 import { MerchantTerminalsService } from '@/modules/merchant-terminals/merchant-terminals.service';
 import {
   GetStatusInput,
@@ -19,6 +12,14 @@ import {
   CreatePaymentResult,
   GatewayStatusResult,
 } from './payment-gateway.port';
+import {
+  SitefCredentials,
+  SitefOperationResponse,
+  SitefCcrCreateResponse,
+  SitefCcrFinalizeResponse,
+  SitefTransactionC2pResponse,
+  SitefTransactionKeyInfoResponse,
+} from './sitef.types';
 
 type MethodData = Record<string, unknown>;
 
@@ -383,12 +384,16 @@ export class SitefAdapter extends PaymentGatewayPort {
 
   // -- Card CCR (Credicard) -------------------------------------------------
 
-  private async cardCcrCreate(
-    creds: SitefCredentials,
-    amount: number,
-    md: MethodData,
-  ): Promise<CreatePaymentResult> {
-    this.requireFields(md, ['cardNumber', 'tipoDocumento', 'documentoCliente', 'cvc', 'monthExp', 'yearExp', 'cardHolderName']);
+  private async cardCcrCreate(creds: SitefCredentials, amount: number, md: MethodData): Promise<CreatePaymentResult> {
+    this.requireFields(md, [
+      'cardNumber',
+      'tipoDocumento',
+      'documentoCliente',
+      'cvc',
+      'monthExp',
+      'yearExp',
+      'cardHolderName',
+    ]);
 
     const { request, response } = await this.client.postCamel('/s4/sitefAuth/setCCRSitefApi', creds, {
       amount,
@@ -406,7 +411,9 @@ export class SitefAdapter extends PaymentGatewayPort {
     const rawResponse = response as unknown as Record<string, unknown>;
 
     if (!orderId) {
-      this.logger.error(`Sitef CCR setCCRSitefApi sin orderId. status=${ccrResp.status} body=${JSON.stringify(response).slice(0, 500)}`);
+      this.logger.error(
+        `Sitef CCR setCCRSitefApi sin orderId. status=${ccrResp.status} body=${JSON.stringify(response).slice(0, 500)}`,
+      );
       return {
         status: 'failed',
         gatewayReference: null,
@@ -445,7 +452,15 @@ export class SitefAdapter extends PaymentGatewayPort {
     otp: string,
     md: MethodData,
   ): Promise<CreatePaymentResult> {
-    this.requireFields(md, ['cardNumber', 'tipoDocumento', 'documentoCliente', 'cvc', 'monthExp', 'yearExp', 'cardHolderName']);
+    this.requireFields(md, [
+      'cardNumber',
+      'tipoDocumento',
+      'documentoCliente',
+      'cvc',
+      'monthExp',
+      'yearExp',
+      'cardHolderName',
+    ]);
 
     const orderId = md.gatewayReference ?? md.orderId;
     if (!orderId) throw new BadRequestException('CCR: orderId requerido para finalizar pago (gatewayReference vacío).');
@@ -486,31 +501,15 @@ export class SitefAdapter extends PaymentGatewayPort {
       status: 'failed',
       gatewayReference: orderId as string,
       failureCode: 'CCR_REJECTED',
+      // Prioridad: el veredicto del recibo del banco; si no vino, el error normalizado
+      // (extractSitefError cubre INVALID_DATA y los rechazos con metadata adjunta).
       failureMessage:
         ccrResp.data?.data?.receipt?.result?.message ??
-        this.ccrInvalidDataMessage(ccrResp) ??
-        `Sitef CCR no aprobó el pago. status=${ccrResp.status}`,
+        extractSitefError(response)?.message ??
+        'El banco no aprobó el pago con esa tarjeta.',
       rawRequest: request,
       rawResponse,
     };
-  }
-
-  /**
-   * Errores de validación de Credicard: { data: { code: "INVALID_DATA", message: "Datos
-   * invalidos", data: { pin: "Debe tener al menos 4 caracteres" } } }. Se aplanan a un mensaje
-   * legible ("Datos inválidos — pin: Debe tener al menos 4 caracteres") en vez del genérico.
-   */
-  private ccrInvalidDataMessage(ccrResp: SitefCcrFinalizeResponse): string | null {
-    const err = ccrResp.data as unknown as { message?: unknown; data?: unknown } | undefined;
-    if (typeof err?.message !== 'string') return null;
-    const fields =
-      err.data && typeof err.data === 'object'
-        ? Object.entries(err.data as Record<string, unknown>)
-            .filter(([, v]) => typeof v === 'string')
-            .map(([k, v]) => `${k}: ${v as string}`)
-            .join('; ')
-        : '';
-    return fields.length > 0 ? `${err.message} — ${fields}` : err.message;
   }
 
   // -- Card (Botón Mercantil) -----------------------------------------------
@@ -587,9 +586,6 @@ export class SitefAdapter extends PaymentGatewayPort {
     request: Record<string, unknown>,
     rawResponse: Record<string, unknown>,
   ): CreatePaymentResult {
-    const sitefError = r.data?.error_list?.[0];
-    if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
-
     const rejection = this.sitefRejection(r);
     if (rejection) {
       return {
@@ -622,9 +618,6 @@ export class SitefAdapter extends PaymentGatewayPort {
     request: Record<string, unknown>,
     rawResponse: Record<string, unknown>,
   ): CreatePaymentResult {
-    const sitefError = r.data?.error_list?.[0];
-    if (sitefError) return this.mercantilError(sitefError, request, rawResponse);
-
     const rejection = this.sitefRejection(r);
     if (rejection) {
       return {
@@ -656,21 +649,6 @@ export class SitefAdapter extends PaymentGatewayPort {
     };
   }
 
-  private mercantilError(
-    err: { error_code?: string; description?: string },
-    request: Record<string, unknown>,
-    rawResponse: Record<string, unknown>,
-  ): CreatePaymentResult {
-    return {
-      status: 'failed',
-      gatewayReference: null,
-      failureCode: `MERCANTIL_${err.error_code ?? 'ERROR'}`,
-      failureMessage: err.description ?? 'Mercantil rechazó la transacción.',
-      rawRequest: request,
-      rawResponse,
-    };
-  }
-
   // -- Transaction list helper ----------------------------------------------
 
   private mapTransactionListResult(
@@ -679,21 +657,7 @@ export class SitefAdapter extends PaymentGatewayPort {
     rawResponse: Record<string, unknown>,
     expectedInvoiceNumber?: string,
   ): CreatePaymentResult {
-    // Sitef devuelve error_list cuando un campo es inválido (ej. referencia mal formada).
-    // Hay que exponerlo en vez de enmascararlo como un genérico NOT_FOUND.
-    const sitefError = r.data?.error_list?.[0];
-    if (sitefError) {
-      return {
-        status: 'failed',
-        gatewayReference: null,
-        failureCode: `SITEF_${sitefError.error_code ?? 'ERROR'}`,
-        failureMessage: sitefError.description ?? 'Sitef rechazó la verificación.',
-        rawRequest: request,
-        rawResponse,
-      };
-    }
-
-    // `messages` a nivel raíz es un RECHAZO aunque venga acompañado de transaction_list:
+    // `messages`/`error_list` es un RECHAZO aunque venga acompañado de transaction_list:
     // el caso real es "Transaccion duplicada" — Sitef devuelve la transacción original,
     // ya consumida por otra factura. Sin este corte se aprobaba el cobro por segunda vez.
     // Fail-closed a propósito: ante un aviso que no sabemos interpretar, no se otorga nada.
@@ -751,23 +715,20 @@ export class SitefAdapter extends PaymentGatewayPort {
    * el cliente final ("Transacción ya procesada anteriormente. Referencia: 744753"), así
    * que se propagan tal cual a `failureMessage` y la landing los pinta en pantalla.
    */
+  /**
+   * Punto ÚNICO de detección de rechazos: `extractSitefError` cubre los cuatro formatos de
+   * error de Sitef y devuelve el texto ya redactado para el cliente (ver sitef-errors.ts).
+   * `failureCode` conserva el código técnico para soporte; el cliente solo ve el mensaje.
+   */
   private sitefRejection(r: SitefOperationResponse): { code: string; message: string } | null {
-    const messages = (r.messages ?? []).filter((m) => m?.message || m?.field);
-    if (messages.length === 0) return null;
+    const err = extractSitefError(r);
+    if (!err) return null;
 
-    // Al cliente solo se le muestra `message` (ya viene redactado para él). `field` es el
-    // identificador técnico de Sitef ("issuingBank", "Transaccion duplicada"): sirve para
-    // clasificar el fallo y queda en el raw_response, pero no se pinta en pantalla.
-    const text = messages
-      .map((m) => m.message?.trim())
-      .filter((m): m is string => !!m)
-      .join(' ');
-    const isDuplicate = messages.some((m) => `${m.field ?? ''} ${m.message ?? ''}`.toLowerCase().includes('duplicad'));
-
-    this.logger.warn(`Sitef rechazó con messages[]: ${JSON.stringify(messages)}`);
+    const duplicate = `${JSON.stringify(r.messages ?? [])} ${err.message}`.toLowerCase().includes('duplicad');
+    this.logger.warn(`Sitef rechazó (code=${err.code ?? '—'}): ${err.message}`);
     return {
-      code: isDuplicate ? 'REFERENCE_ALREADY_USED' : 'SITEF_MESSAGE',
-      message: text || 'Sitef rechazó la operación.',
+      code: duplicate ? 'REFERENCE_ALREADY_USED' : err.code ? `SITEF_${err.code}` : 'SITEF_MESSAGE',
+      message: err.message,
     };
   }
 

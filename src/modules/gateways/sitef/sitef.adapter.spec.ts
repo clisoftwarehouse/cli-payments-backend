@@ -292,8 +292,9 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
         },
       });
       expect(r.status).toBe('failed');
-      expect(r.failureCode).toBe('MERCANTIL_80');
-      expect(r.failureMessage).toBe('Numero de tarjeta incorrecto');
+      expect(r.failureCode).toBe('SITEF_80');
+      // El catálogo reescribe la descripción técnica de Sitef en algo accionable.
+      expect(r.failureMessage).toBe('El número de tarjeta es incorrecto. Verifícalo e intenta de nuevo.');
     });
 
     it('should aplanar el INVALID_DATA de Credicard a un mensaje legible (caso real: pin)', async () => {
@@ -332,7 +333,7 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       });
 
       expect(r.status).toBe('failed');
-      expect(r.failureMessage).toBe('Datos invalidos — pin: Debe tener al menos 4 caracteres');
+      expect(r.failureMessage).toBe('Datos invalidos (pin: Debe tener al menos 4 caracteres)');
     });
 
     it('should reenviar el pin en el finalize CCR cuando el cliente lo proporciona', async () => {
@@ -502,7 +503,10 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       });
 
       expect(r.status).toBe('failed');
-      expect(r.failureMessage).toBe('Banco emisor no autorizado para débito inmediato');
+      // Se conserva el texto de Sitef y se le añade la salida accionable.
+      expect(r.failureMessage).toBe(
+        'Banco emisor no autorizado para débito inmediato. Prueba con otro banco o método de pago.',
+      );
       expect(r.failureMessage).not.toContain('issuingBank');
     });
 
