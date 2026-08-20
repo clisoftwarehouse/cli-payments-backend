@@ -11,6 +11,7 @@ import { MerchantTerminalsService } from '@/modules/merchant-terminals/merchant-
 describe('SitefAdapter — normalización de campos Sitef', () => {
   let postMock: jest.Mock;
   let postCamelMock: jest.Mock;
+  let postWebhookMock: jest.Mock;
   let adapter: SitefAdapter;
 
   // Respuesta que satisface tanto a mapTransactionListResult (transaction_list) como a
@@ -44,7 +45,12 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       },
     }));
 
-    const client = { post: postMock, postCamel: postCamelMock } as unknown as SitefClient;
+    postWebhookMock = jest.fn(() => ({ response: {} }));
+    const client = {
+      post: postMock,
+      postCamel: postCamelMock,
+      postWebhook: postWebhookMock,
+    } as unknown as SitefClient;
     const terminals = {
       resolveForApplication: jest.fn(() => ({
         sitefUsername: 'cobeca',
@@ -628,7 +634,9 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.methodDataPatch).toEqual({
         mercantilAuthToken: 'WHNOpdWrZv3T6HYCR/blob-cifrado',
         mercantilReferenceNumber: '63314648126',
+        // La factura de Sitef + su fecha son la clave de `consulta_mercantil`.
         sitefInvoiceNumber: 'FAC-1786970487121',
+        sitefInvoiceDate: '2026-08-17',
       });
     });
 
@@ -682,6 +690,51 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       const body = lastBody();
       expect(body.authenticationToken).toBeUndefined();
       expect(body.referenceNumber).toBeUndefined();
+    });
+
+    it('should verificar el débito con consulta_mercantil usando la factura FAC- de Sitef', async () => {
+      // Endpoint de la colección oficial de Sitef: cierra el hueco de "cobrado pero sin
+      // confirmación" (getBusquedaSitef no aplica: no hay paymentReference en este método).
+      postWebhookMock.mockResolvedValue({
+        response: {
+          codigo: '00',
+          mensajeCliente: 'OPERACION EXITOSA',
+          referenciaBancoOrdenante: '85264693965',
+          numeroFactura: 'FAC-1786970487121',
+        },
+      });
+
+      const r = await adapter.getStatus({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        methodData: {
+          ...c2pInput.methodData,
+          sitefInvoiceNumber: 'FAC-1786970487121',
+          sitefInvoiceDate: '2026-08-17',
+        },
+      });
+
+      const [path, body] = postWebhookMock.mock.calls.at(-1)!;
+      expect(path).toBe('/s1/webhook/consulta_mercantil');
+      expect(body).toEqual({ fecha: '20260817', numeroFactura: 'FAC-1786970487121', monto: '6.71' });
+      expect(r.status).toBe('succeeded');
+      expect(r.gatewayReference).toBe('85264693965');
+    });
+
+    it('should quedarse en pending si consulta_mercantil no confirma (nunca acreditar a ciegas)', async () => {
+      postWebhookMock.mockResolvedValue({ response: { codigo: '99', mensajeCliente: 'NO PROCESADA' } });
+
+      const r = await adapter.getStatus({
+        applicationId: 'app1',
+        method: 'c2p',
+        invoiceNumber: 'CLI-2026-000061',
+        amount: '6.71',
+        methodData: { ...c2pInput.methodData, sitefInvoiceNumber: 'FAC-1', sitefInvoiceDate: '2026-08-17' },
+      });
+
+      expect(r.status).toBe('pending');
     });
 
     it('should fallar (no requires_otp) si la ejecución con OTP devuelve otra solicitud de clave', async () => {

@@ -101,6 +101,28 @@ export class SitefClient {
   }
 
   /** ¿El body trae un motivo de Sitef que podamos mostrarle al cliente? */
+  /**
+   * POST sin el envoltorio de autenticación de Sitef (ni Bearer, ni username/token/idBranch en
+   * el body). Lo exigen los endpoints `/s1/webhook/*` de Mercantil — ver la colección oficial
+   * "Debito inmediato Mercantil", donde `consulta_mercantil` solo lleva Content-Type.
+   */
+  async postWebhook<T>(path: string, body: Record<string, unknown>): Promise<{ response: T }> {
+    const config = this.configService.getOrThrow<SitefConfig>('sitef', { infer: true });
+    const url = `${config.baseUrl}${path.startsWith('/') ? '' : '/'}${path}`;
+
+    try {
+      const res = await axios.post<T>(url, body, {
+        timeout: config.timeoutMs,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      return { response: res.data };
+    } catch (err) {
+      const axErr = err as AxiosError;
+      this.logger.error(`Sitef ${path} falló (HTTP ${axErr.response?.status ?? '—'}): ${axErr.message}`);
+      throw err;
+    }
+  }
+
   private hasSitefReason(data: SitefOperationResponse | undefined): boolean {
     if (!data || typeof data !== 'object') return false;
     // Tercer formato de error (CCR/Credicard): { data: { code: "INVALID_DATA", message, data: {campo: motivo} } }.

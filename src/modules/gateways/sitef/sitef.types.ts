@@ -95,6 +95,25 @@ export type SitefImmediateDebitResponse = {
 };
 
 /**
+ * Respuesta de `/s1/webhook/consulta_mercantil` (colección oficial "Debito inmediato Mercantil").
+ * El contrato de RESPUESTA no está documentado; los campos se infieren del payload que Mercantil
+ * envía a Sitef en `/s1/webhook/pagomercantil` (`webhookNotificationIn`), que es la misma
+ * información de la operación. Todo opcional a propósito: se lee defensivamente.
+ */
+export type SitefMercantilQueryResponse = {
+  codigo?: string; // "00" = operación exitosa
+  mensajeCliente?: string; // "OPERACION EXITOSA"
+  mensajeSistema?: string;
+  referenciaBancoOrdenante?: string; // referencia del movimiento (ej. "85264693965")
+  numeroFactura?: string; // "FAC-..."
+  monto?: string;
+  fecha?: string;
+  // Sitef a veces envuelve la respuesta; se contempla el anidado.
+  webhookNotificationIn?: Omit<SitefMercantilQueryResponse, 'webhookNotificationIn'>;
+  data?: unknown;
+};
+
+/**
  * Aviso a nivel raíz de la respuesta (hermano de `data`, NO dentro de él).
  * Sitef lo usa para rechazos que igual devuelven `transaction_list`, el caso crítico
  * siendo `field: "Transaccion duplicada"` — la referencia ya se consumió en otra factura.

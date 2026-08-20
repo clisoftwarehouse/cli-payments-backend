@@ -18,6 +18,7 @@ import {
   SitefCcrCreateResponse,
   SitefCcrFinalizeResponse,
   SitefTransactionC2pResponse,
+  SitefMercantilQueryResponse,
   SitefTransactionKeyInfoResponse,
 } from './sitef.types';
 
@@ -105,6 +106,8 @@ export class SitefAdapter extends PaymentGatewayPort {
       destinationbank: this.toBankCode(md.destinationBank),
       invoicenumber: invoiceNumber,
       amount,
+      // Presente en la colección oficial de Sitef para el paso 1 (vacío en su ejemplo).
+      countNumber: '',
     });
 
     const trx = response.data?.transaction_c2p_response;
@@ -291,7 +294,11 @@ export class SitefAdapter extends PaymentGatewayPort {
         methodDataPatch: {
           mercantilAuthToken: keyInfo.authenticationToken,
           mercantilReferenceNumber: keyInfo.referenceNumber?.toString(),
+          // La factura que genera Sitef (FAC-...) y su fecha identifican el pago ante
+          // `consulta_mercantil` — es la única forma de verificar un débito ya cobrado
+          // cuando se pierde la respuesta de confirmación.
           sitefInvoiceNumber: keyInfo.invoiceNumber?.number,
+          sitefInvoiceDate: keyInfo.invoiceNumber?.invoiceCreationDate,
         },
         rawRequest: request,
         rawResponse,
@@ -821,6 +828,13 @@ export class SitefAdapter extends PaymentGatewayPort {
     amount: number,
     md: MethodData,
   ): Promise<GatewayStatusResult> {
+    // Débito inmediato vía Mercantil: getBusquedaSitef no aplica (ni siquiera tenemos
+    // paymentReference/debitPhone, que el cliente nunca teclea en este método). Se verifica
+    // con `consulta_mercantil`, usando la factura FAC-... que Sitef generó en el paso 1.
+    if (typeof md.sitefInvoiceNumber === 'string' && md.sitefInvoiceNumber.length > 0) {
+      return this.verifyMercantilDebit(md.sitefInvoiceNumber, String(md.sitefInvoiceDate ?? md.trxDate ?? ''), amount);
+    }
+
     // getBusquedaSitef necesita: amount, paymentreference, debitphone, origenbank, invoicenumber, trxdate, receivingbank.
     this.requireFields(md, ['paymentReference', 'debitPhone', 'originBank', 'trxDate']);
 
@@ -837,6 +851,61 @@ export class SitefAdapter extends PaymentGatewayPort {
     });
 
     return this.mapPollResult(response, invoiceNumber);
+  }
+
+  /**
+   * Verifica un débito inmediato Mercantil ya iniciado (`/s1/webhook/consulta_mercantil`, de la
+   * colección oficial de Sitef). Cierra el agujero que ya nos costó una factura: si la respuesta
+   * de confirmación se pierde (timeout, 500), el dinero pudo salir y sin esto no había manera de
+   * saberlo. Fecha en YYYYMMDD y monto como string con 2 decimales, según la colección.
+   *
+   * El contrato de RESPUESTA no está documentado → se lee defensivamente y solo se da por
+   * aprobado con evidencia explícita (código "00", mensaje de éxito o referencia bancaria).
+   * Cualquier otra cosa queda `pending`: el poller reintenta y nunca se acredita a ciegas.
+   */
+  private async verifyMercantilDebit(
+    sitefInvoiceNumber: string,
+    date: string,
+    amount: number,
+  ): Promise<GatewayStatusResult> {
+    const { response } = await this.client.postWebhook<SitefMercantilQueryResponse>(
+      '/s1/webhook/consulta_mercantil',
+      {
+        fecha: this.toCompactDate(date),
+        numeroFactura: sitefInvoiceNumber,
+        monto: amount.toFixed(2),
+      },
+    );
+
+    const rawResponse = (response ?? {}) as unknown as Record<string, unknown>;
+    const info = response?.webhookNotificationIn ?? response ?? {};
+    const reference = info.referenciaBancoOrdenante;
+    const messages = `${info.mensajeCliente ?? ''} ${info.mensajeSistema ?? ''}`.toLowerCase();
+    const approved = info.codigo === '00' || messages.includes('exitosa') || !!reference;
+
+    if (approved && reference) {
+      return { status: 'succeeded', gatewayReference: String(reference), rawResponse };
+    }
+    if (approved) {
+      // Aprobado sin referencia: se acredita igual (el dinero salió), dejando traza para soporte.
+      this.logger.warn(`consulta_mercantil aprobó ${sitefInvoiceNumber} sin referenciaBancoOrdenante.`);
+      return { status: 'succeeded', gatewayReference: sitefInvoiceNumber, rawResponse };
+    }
+    return { status: 'pending', gatewayReference: null, rawResponse };
+  }
+
+  /** `2026-08-17` o `2026-08-17T...` → `20260817`, formato que exige consulta_mercantil. */
+  private toCompactDate(value: string): string {
+    const digits = String(value ?? '').replace(/\D/g, '');
+    if (digits.length >= 8) return digits.slice(0, 8);
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Caracas',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+      .format(new Date())
+      .replace(/\D/g, '');
   }
 
   private async pollWebButton(
