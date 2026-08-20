@@ -868,14 +868,11 @@ export class SitefAdapter extends PaymentGatewayPort {
     date: string,
     amount: number,
   ): Promise<GatewayStatusResult> {
-    const { response } = await this.client.postWebhook<SitefMercantilQueryResponse>(
-      '/s1/webhook/consulta_mercantil',
-      {
-        fecha: this.toCompactDate(date),
-        numeroFactura: sitefInvoiceNumber,
-        monto: amount.toFixed(2),
-      },
-    );
+    const { response } = await this.client.postWebhook<SitefMercantilQueryResponse>('/s1/webhook/consulta_mercantil', {
+      fecha: this.toCompactDate(date),
+      numeroFactura: sitefInvoiceNumber,
+      monto: amount.toFixed(2),
+    });
 
     const rawResponse = (response ?? {}) as unknown as Record<string, unknown>;
     const info = response?.webhookNotificationIn ?? response ?? {};
