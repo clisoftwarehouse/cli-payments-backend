@@ -482,9 +482,12 @@ export class SitefAdapter extends PaymentGatewayPort {
       cvc: md.cvc,
       monthExp: md.monthExp,
       yearExp: md.yearExp,
-      pin: md.pin ?? '',
-      accountType: md.accountType ?? '',
-      otp,
+      // `null`, NO cadena vacía, cuando el campo no aplica (ej. crédito no lleva PIN): Credicard
+      // valida el string vacío y rechaza con INVALID_DATA "pin: Debe tener al menos 4 caracteres".
+      // La colección oficial usa `null` para los campos opcionales ("debe ser null o enviar un campo").
+      pin: this.optionalField(md.pin),
+      accountType: this.optionalField(md.accountType),
+      otp: this.optionalField(otp),
     });
 
     const ccrResp = response as unknown as SitefCcrFinalizeResponse;
@@ -889,6 +892,15 @@ export class SitefAdapter extends PaymentGatewayPort {
       return { status: 'succeeded', gatewayReference: sitefInvoiceNumber, rawResponse };
     }
     return { status: 'pending', gatewayReference: null, rawResponse };
+  }
+
+  /**
+   * Campo opcional para Sitef: valor si lo hay, `null` si no. Nunca cadena vacía — Credicard la
+   * valida como si fuera un valor real y rechaza la operación (INVALID_DATA).
+   */
+  private optionalField(value: unknown): string | null {
+    const text = typeof value === 'string' ? value.trim() : value != null ? String(value) : '';
+    return text.length > 0 ? text : null;
   }
 
   /** `2026-08-17` o `2026-08-17T...` → `20260817`, formato que exige consulta_mercantil. */

@@ -377,6 +377,39 @@ describe('SitefAdapter — normalización de campos Sitef', () => {
       expect(r.status).toBe('succeeded');
     });
 
+    it('should enviar pin null (no cadena vacía) en crédito, que no lleva PIN', async () => {
+      // Regresión: `pin: ''` hacía que Credicard rechazara con INVALID_DATA
+      // "pin: Debe tener al menos 4 caracteres" — el crédito habría fallado siempre.
+      postCamelMock.mockResolvedValue({
+        request: {},
+        response: { data: { data: { status: 'paid', referenceId: 1, receipt: { result: { message: 'APROBADO' } } } } },
+      });
+
+      await adapter.submitOtp({
+        applicationId: 'app1',
+        method: 'card_ccr',
+        invoiceNumber: 'CLI-1',
+        amount: '5.00',
+        otp: '0.5',
+        methodData: {
+          cardNumber: '5417440009046826',
+          tipoDocumento: 'V',
+          documentoCliente: '19419457',
+          cvc: '292',
+          monthExp: '01',
+          yearExp: '2031',
+          cardHolderName: 'YULIMAR LOPEZ',
+          accountType: '00', // crédito: sin pin
+          gatewayReference: 'order-1',
+        },
+      });
+
+      const body = lastCamelBody();
+      expect(body.pin).toBeNull();
+      expect(body.accountType).toBe('00');
+      expect(body.otp).toBe('0.5');
+    });
+
     it('should convertir a string el referenceId numerico del finalize CCR (payload real)', async () => {
       // Credicard devuelve referenceId como NUMBER (765800); pasarlo crudo a gatewayReference
       // (varchar + .trim() aguas abajo) tumbo con 500 un pago YA COBRADO por el banco.
